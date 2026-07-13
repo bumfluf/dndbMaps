@@ -1,6 +1,6 @@
-﻿# D&D Beyond Extension
+﻿# D&D Beyond Maps Explorer
 
-A Chrome extension for enhancing the D&D Beyond experience.
+Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map images directly inside the site for fast access.
 
 ## Project Structure
 
@@ -91,7 +91,6 @@ Your maps will automatically load based on which character sheet you're viewing.
 - `activeTab`: Access current tab information
 - `scripting`: Inject scripts into pages
 - `dndbeyond.com/*`: Host permission for D&D Beyond
-- `googleapis.com/*`: Google Drive API access
 - `drive.google.com/*`: Google Drive access
 
 ## File Descriptions

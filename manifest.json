@@ -6,9 +6,7 @@
   "permissions": [
     "storage",
     "tabs",
-    "activeTab",
-    "scripting",
-    "identity"
+    "scripting"
   ],
   "host_permissions": [
     "https://www.dndbeyond.com/*",

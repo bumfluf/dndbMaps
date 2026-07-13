@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - D&D Beyond Maps Explorer</title>
+</head>
+<body>
+    <h1>Privacy Policy</h1>
+
+    <h2>1. Introduction</h2>
+    <p>D&amp;D Beyond Maps Explorer does not collect personal data for advertising or tracking purposes. This privacy policy explains what information the extension reads, stores, and uses to provide its functionality.</p>
+
+    <h2>2. Data Collected</h2>
+    <p>The extension may process the following user-provided information:</p>
+    <ul>
+        <li>D&amp;D Beyond character names shown on the character sheet page</li>
+        <li>Google Drive folder URLs or folder IDs entered by the user</li>
+        <li>Cached map metadata and folder parsing state stored locally in the browser</li>
+    </ul>
+
+    <h2>3. How Data Is Collected</h2>
+    <p>Data is collected only through direct user interaction and extension behavior:</p>
+    <ul>
+        <li>The extension Options page saves character-to-folder mappings when you add or update a mapping.</li>
+        <li>The content script reads the active D&amp;D Beyond page to detect the character name for matching.</li>
+        <li>The background/content scripts fetch and cache Google Drive folder HTML when loading maps.</li>
+    </ul>
+
+    <h2>4. Purpose of Collection</h2>
+    <p>Data is used only to:</p>
+    <ul>
+        <li>Match the current D&amp;D Beyond character page to the correct Google Drive folder</li>
+        <li>Load and display maps from the user-specified Drive folder</li>
+        <li>Cache Drive folder results for faster map loading</li>
+        <li>Autofill character names in the extension Options page when a D&amp;D Beyond tab is open</li>
+    </ul>
+
+    <h2>5. Data Storage</h2>
+    <p>Data is stored locally in the browser using Chrome’s extension storage. Character-to-folder mappings and cached folder state are kept within the browser so the extension can restore settings and load maps more quickly. The extension does not store this data on any external server as part of normal operation.</p>
+
+    <h2>6. Data Sharing</h2>
+    <p>The extension does not share user data with third parties.</p>
+    <ul>
+        <li>No analytics providers</li>
+        <li>No advertising networks</li>
+        <li>No external data brokers</li>
+    </ul>
+
+    <h2>7. Remote Code and External Access</h2>
+    <p>The extension does not execute remote JavaScript or WebAssembly from external hosts. All extension code is packaged inside the extension bundle.</p>
+
+    <h2>8. Security</h2>
+    <p>Stored data is kept inside Chrome’s extension storage. The extension does not transmit user data to any external server under normal operation; it only makes browser fetch requests to Google Drive when loading user-specified maps.</p>
+
+    <h2>9. User Control</h2>
+    <p>You can delete or modify mappings at any time via the extension Options page. Clearing browser storage or uninstalling the extension removes stored mappings and cached data.</p>
+
+    <h2>10. Changes to this Policy</h2>
+    <p>If the extension’s behavior changes, this policy will be updated accordingly. Always refer to the latest published version for the current data handling practices.</p>
+</body>
+</html>

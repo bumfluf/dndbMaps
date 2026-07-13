@@ -653,15 +653,15 @@ function populateMapsContent(container) {
 
     mapsTab.dataset.mapsContentRendered = 'true';
 
-    mapsTab.innerHTML = `
-            <section class="ct-extras ct-maps-section" style="padding: 0 20px 20px; display: flex; flex-direction: column; min-height: 100%; height: 100%; width: 100%; box-sizing: border-box;">
+        mapsTab.innerHTML = `
+            <section class="ct-extras ct-maps-section" style="padding: 0 0px 20px; display: flex; flex-direction: column; min-height: 100%; height: 100%; width: 100%; box-sizing: border-box;">
                 <h2 class="accessibility_screenreaderOnly__OEzRB">Maps</h2>
 
                 <div class="ct-equipment__filter" style="margin-bottom: 16px; width: 100%; display: flex; align-items: center; gap: 8px;">
                     <div class="ct-inventory-filter" style="width: 100%; flex: 1 1 auto;">
                         <div class="ct-inventory-filter__interactions" style="width: 100%;">
                             <div class="ct-inventory-filter__box" style="width: 100%;">
-                                <div class="ct-inventory-filter__primary" style="width: 100%; display: flex; align-items: center; gap: 8px;">
+                                <div class="ct-inventory-filter__primary" style="width: 100%; display: flex; align-items: center; gap: 0px;">
                                     <div class="ct-inventory-filter__primary-group ct-inventory-filter__primary-group--first" style="display: flex; align-items: center; justify-content: center;">
                                         <div class="ct-inventory-filter__icon"></div>
                                     </div>

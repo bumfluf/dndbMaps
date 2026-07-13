@@ -1,8 +1,8 @@
 ﻿{
   "manifest_version": 3,
-  "name": "D&D Beyond Extension",
+  "name": "D&D Beyond Maps Explorer",
   "version": "1.0.0",
-  "description": "A Chrome extension for D&D Beyond",
+  "description": "Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map images directly inside the site for fast access.",
   "permissions": [
     "storage",
     "tabs",
@@ -12,7 +12,6 @@
   ],
   "host_permissions": [
     "https://www.dndbeyond.com/*",
-    "https://www.googleapis.com/*",
     "https://drive.google.com/*"
   ],
   "action": {

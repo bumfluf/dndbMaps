@@ -861,14 +861,14 @@ function loadStoredMaps(container) {
     }
 
     if (!currentCharacterName) {
-        if (DDB_DEBUG) console.log('No character name detected on page; prompting user to add mapping in Options');
-        showMapsOptionsPrompt(contentArea, emptyState, 'Character name not detected.', 'The extension could not find the character name on this page. Open extension Options and add a mapping linking your character\'s D&D Beyond name to a Google Drive folder.');
+        if (DDB_DEBUG) console.log('No character name detected on page; prompting user to add mapping in Settings');
+        showMapsSettingsPrompt(contentArea, emptyState, 'Character name not detected.', 'The extension could not find the character name on this page. Open extension Settings and add a mapping linking your character\'s D&D Beyond name to a Google Drive folder.');
         return;
     }
 
     if (!currentCharacterSettings) {
-        if (DDB_DEBUG) console.log('Character name detected but no matching mapping found; guiding user to Options');
-        showMapsOptionsPrompt(contentArea, emptyState, 'No mapping found for this character.', `The character name <strong>${escapeHtml(currentCharacterName)}</strong> does not match any configured mapping. Open extension Options to add or update the character-to-folder mapping.`);
+        if (DDB_DEBUG) console.log('Character name detected but no matching mapping found; guiding user to Settings');
+        showMapsSettingsPrompt(contentArea, emptyState, 'No mapping found for this character.', `The character name <strong>${escapeHtml(currentCharacterName)}</strong> does not match any configured mapping. Open extension Settings to add or update the character-to-folder mapping.`);
         return;
     }
 
@@ -1420,7 +1420,7 @@ function extractGoogleDriveFileEntries(html, folderId) {
     return [];
 }
 
-function showMapsOptionsPrompt(contentArea, emptyState, title, messageHtml) {
+function showMapsSettingsPrompt(contentArea, emptyState, title, messageHtml) {
     if (!contentArea || !emptyState) return;
 
     contentArea.innerHTML = '';
@@ -1440,7 +1440,7 @@ function showMapsOptionsPrompt(contentArea, emptyState, title, messageHtml) {
     }
 
     setTimeout(() => {
-        const link = emptyState.querySelector('#maps-open-options');
+        const link = emptyState.querySelector('#maps-open-settings');
         if (link) {
             link.addEventListener('click', (ev) => {
                 ev.preventDefault();
@@ -1448,11 +1448,11 @@ function showMapsOptionsPrompt(contentArea, emptyState, title, messageHtml) {
                     if (chrome && chrome.runtime && chrome.runtime.openOptionsPage) {
                         chrome.runtime.openOptionsPage();
                     } else {
-                        window.open('options.html', '_blank');
+                        window.open('settings.html', '_blank');
                     }
                 } catch (e) {
-                    console.warn('Unable to open Options page programmatically:', e);
-                    alert('Please open the extension Options (right-click the extension icon → Options) and add a mapping for your character.');
+                    console.warn('Unable to open Settings page programmatically:', e);
+                    alert('Please open the extension Settings (right-click the extension icon → Settings) and add a mapping for your character.');
                 }
             });
         }

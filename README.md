@@ -10,9 +10,9 @@ Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map im
 │   ├── popup.html        # Popup UI
 │   ├── popup.css         # Popup styles
 │   ├── popup.js          # Popup logic
-│   ├── options.html      # Settings page
-│   ├── options.css       # Settings styles
-│   ├── options.js        # Settings logic
+│   ├── settings.html     # Settings page
+│   ├── settings.css      # Settings styles
+│   ├── settings.js       # Settings logic
 │   ├── background.js     # Background service worker
 │   └── content.js        # Content script for D&D Beyond pages
 ├── icons/                # Extension icons
@@ -49,7 +49,7 @@ Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map im
 ### Configuration
 
 1. Click the extension icon in your toolbar
-2. Right-click and select "Options" to open Settings
+2. Right-click and select "Settings" to open Settings
 3. Add your character name and Google Drive folder link
 4. Test the connection
 5. Maps will automatically load when viewing that character's sheet
@@ -73,8 +73,8 @@ Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map im
 
 Access extension settings by:
 1. Right-clicking the extension icon
-2. Selecting "Options"
-3. Or go to `chrome://extensions/` → Find extension → "Options"
+2. Selecting "Settings"
+3. Or go to `chrome://extensions/` → Find extension → "Settings"
 
 ### Configure Character Mappings
 
@@ -97,7 +97,7 @@ Your maps will automatically load based on which character sheet you're viewing.
 
 - **manifest.json**: Defines extension metadata, permissions, and entry points
 - **popup.html/css/js**: Creates the extension popup UI
-- **options.html/css/js**: Settings page for character mappings
+- **settings.html/css/js**: Settings page for character mappings
 - **background.js**: Service worker that runs in the background
 - **content.js**: Script injected into D&D Beyond pages
 - **icons/**: Extension icon SVGs

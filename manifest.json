@@ -1,7 +1,7 @@
 ﻿{
   "manifest_version": 3,
   "name": "D&D Beyond Maps Explorer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Adds a Maps tab to D&D Beyond character pages and loads your Google Drive map images directly inside the site for fast access.",
   "permissions": [
     "storage",
@@ -29,7 +29,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "options_page": "src/options.html",
+  "options_page": "src/settings.html",
   "content_scripts": [
     {
       "matches": ["https://www.dndbeyond.com/*"],

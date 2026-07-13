@@ -666,7 +666,7 @@ function populateMapsContent(container) {
                                         <div class="ct-inventory-filter__icon"></div>
                                     </div>
                                     <div class="ct-inventory-filter__field" style="flex: 1 1 auto;">
-                                        <input class="ct-inventory-filter__input" placeholder="Search map names" type="search" value="" aria-label="Search maps by name">
+                                        <input class="ct-inventory-filter__input" placeholder="Search Maps" type="search" value="" aria-label="Search maps by name">
                                     </div>
                                     <div class="ct-inventory-filter__clear" style="display: none;">Clear X</div>
                                 </div>

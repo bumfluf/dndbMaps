@@ -1579,9 +1579,10 @@ function createMapCard(map, index) {
     const mapName = document.createElement('div');
     mapName.textContent = (map.name || '').substring(0, 50) + ((map.name || '').length > 50 ? '...' : '');
     mapName.style.cssText = `
-        font-size: 11px;
-        color: #333;
-        font-weight: 500;
+        color: var(--theme-contrast, #333);
+        font-family: var(--font-condensed, inherit);
+        font-weight: 700;
+        font-size: .725rem;
         text-align: center;
         white-space: normal;
         overflow: hidden;
@@ -1590,7 +1591,7 @@ function createMapCard(map, index) {
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         line-height: 1.2;
-        margin: 0; /* ensure no external margins affect spacing */
+        margin: 0;
     `;
     mapName.title = map.name || '';
 

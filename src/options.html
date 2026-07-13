@@ -1,0 +1,109 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D&D Beyond Extension - Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <div class="options-container">
+        <header class="options-header">
+            <h1>D&D Beyond Maps Extension</h1>
+            <p class="subtitle">Character Map Settings</p>
+        </header>
+
+        <main class="options-main">
+            <!-- Character Mapping Section -->
+            <section class="settings-section">
+                <h2>Character Map Locations</h2>
+                <p class="section-description">Link your characters to Google Drive folders containing their campaign maps.</p>
+
+                <!-- Add New Character Form -->
+                <div class="form-section">
+                    <h3>Add Character Mapping</h3>
+                    
+                    <div class="form-group">
+                        <label for="characterName">Character Name</label>
+                        <input type="text" id="characterName" placeholder="e.g., Gandor the Bold" autocomplete="off">
+                        <small>The name must match your D&D Beyond character sheet name</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="googleDriveFolder">Google Drive Folder Link or ID</label>
+                        <input type="text" id="googleDriveFolder" placeholder="https://drive.google.com/drive/folders/YOUR_FOLDER_ID or just the FOLDER_ID">
+                        <small>Share a folder with your Google account, then paste the link or folder ID</small>
+                    </div>
+
+                    <div class="form-actions">
+                        <button id="testConnectionBtn" class="btn btn-secondary">Test Connection</button>
+                        <button id="addCharacterBtn" class="btn btn-primary">Add Character</button>
+                    </div>
+
+                    <div class="form-group form-group-checkbox">
+                        <label for="searchSubfolders">Search subfolders when loading maps <input type="checkbox" id="searchSubfolders"></label>
+                        <small class="subfolder-help">When enabled, the extension will search inside subfolders of the mapped folder. Depth (levels): <input type="number" id="subfolderDepth" min="1" max="6" value="3" style="width:60px; display:inline-block; margin-left:6px;"></small>
+                    </div>
+
+                    <div id="statusMessage" class="status-message"></div>
+                </div>
+
+                <!-- Character Mappings List -->
+                <div class="mappings-section">
+                    <h3>Your Character Mappings</h3>
+                    <div id="mappingsList" class="mappings-list">
+                        <p class="empty-state">No character mappings yet. Add one above!</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Instructions Section -->
+            <section class="settings-section">
+                <h2>How to Use</h2>
+                <div class="instructions">
+                    <ol>
+                        <li>
+                            <strong>Create a Google Drive folder</strong> for your campaign maps
+                        </li>
+                        <li>
+                            <strong>Share the folder</strong> with your Google account, set folder permissions to "Anyone with the link can view" or "Anyone with the link can edit" depending on your preference
+                        </li>
+                        <li>
+                            <strong>Copy the folder link</strong> from the address bar or share button
+                        </li>
+                        <li>
+                            <strong>Add your character</strong> using the form above:
+                            <ul>
+                                <li>Enter your character name (as it appears in D&D Beyond)</li>
+                                <li>Paste the Google Drive folder link</li>
+                                <li>Click "Test Connection" to verify access</li>
+                                <li>Click "Add Character" to save</li>
+                            </ul>
+                        </li>
+                        <li>
+                            <strong>View maps on D&D Beyond:</strong> When you view your character's sheet, click the "Maps" tab to see maps from the linked folder
+                        </li>
+                    </ol>
+                </div>
+            </section>
+
+            <!-- Notes Section -->
+            <section class="settings-section">
+                <h2>Notes</h2>
+                <ul class="notes-list">
+                    <li>Maps are loaded automatically when you switch to a character with a saved Google Drive folder</li>
+                    <li>You can map multiple characters to different folders</li>
+                    <li>Maps are cached in the browser for faster loading</li>
+                    <li>PNG, JPEG, JPG, GIF, WEBP, SVG, and BMP images are supported</li>
+                </ul>
+            </section>
+        </main>
+
+        <footer class="options-footer">
+            <p>&copy; 2026 D&D Beyond Extension | Character Maps</p>
+        </footer>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,1787 @@
+﻿// Content script for D&D Beyond Extension
+// This script runs on D&D Beyond pages
+
+console.info('[maps] content script loaded');
+// Toggle verbose debug logs
+const DDB_DEBUG = false;
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+    if (DDB_DEBUG) originalConsoleLog(...args);
+};
+function debugLog(...args) { if (DDB_DEBUG) console.log.apply(console, args); }
+if (DDB_DEBUG) originalConsoleLog('[maps] Debug logging enabled');
+function logMapsTiming(label, startedAt, extraInfo) {
+    const elapsed = Math.round(performance.now() - startedAt);
+    const suffix = extraInfo ? ` (${extraInfo})` : '';
+    console.info(`[maps] ${label}: ${elapsed}ms${suffix}`);
+}
+
+// Detect Underdark (dark) mode by checking character sheet computed color
+// (thumbnail footer theming removed — revert to original light-only footers)
+
+// Listen for messages from popup or background
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (DDB_DEBUG) console.log('Message received in content script:', message);
+    
+    if (message.action === 'getData') {
+        // Extract data from the page
+        const data = {
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toLocaleString()
+        };
+        
+        // Send data back to popup
+        sendResponse({ data: JSON.stringify(data, null, 2) });
+        
+        // Also save to storage via background script
+        chrome.runtime.sendMessage({
+            action: 'saveData',
+            data: JSON.stringify(data)
+        });
+        return;
+    }
+
+    if (message.action === 'getCharacterName') {
+        if (currentCharacterName) {
+            sendResponse({ characterName: currentCharacterName });
+            return;
+        }
+
+        const found = findCharacterName();
+        if (found) {
+            sendResponse({ characterName: currentCharacterName });
+            return;
+        }
+
+        sendResponse({ characterName: null });
+    }
+});
+
+function injectTabButtonStyles() {
+    if (document.querySelector('#ddb-maps-tab-style')) {
+        return;
+    }
+
+    const style = document.createElement('style');
+    style.id = 'ddb-maps-tab-style';
+    style.textContent = `
+        menu.styles_tabs__aTttL button.styles_tabButton__wvSLf {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        menu.styles_tabs__aTttL button.styles_tabButton__wvSLf span,
+        menu.styles_tabs__aTttL button.styles_tabButton__wvSLf {
+            white-space: nowrap !important;
+        }
+        menu.styles_tabs__aTttL li {
+            min-width: 0 !important;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+// Initialize extension and inject Maps tab
+async function initializeExtension() {
+    debugLog('Extension initialized on page:', document.title);
+    
+    injectTabButtonStyles();
+    
+    // Get character name and settings
+    await getCharacterName();
+    await loadCharacterSettings();
+
+    if (currentCharacterSettings && currentCharacterSettings.folderId) {
+        setTimeout(() => {
+            void preloadMapsCacheIfNeeded();
+        }, 250);
+    }
+    
+    injectMapsTab();
+}
+
+// Get the character name from the page
+let currentCharacterName = null;
+let lastCharacterUrl = null;
+let currentCharacterSettings = null;
+async function getCharacterName() {
+    // If the URL changed since last detection, clear cached name so we re-detect
+    try {
+        const href = window.location.href;
+        if (lastCharacterUrl !== href) {
+            if (lastCharacterUrl !== null) console.log('URL changed, clearing cached character name:', lastCharacterUrl, '->', href);
+            currentCharacterName = null;
+            lastCharacterUrl = href;
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    if (currentCharacterName) {
+        return;
+    }
+
+    // Attempt immediately, then retry while the page renders
+    if (findCharacterName()) {
+        return;
+    }
+
+    const maxAttempts = 10;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (findCharacterName()) {
+            return;
+        }
+        console.log(`Retrying character name detection (${attempt}/${maxAttempts})`);
+    }
+
+    console.log('Character name detection timed out after retries');
+}
+
+function findCharacterName() {
+    const invalidCharacterNames = new Set(['', 'profile', 'settings', 'home', 'extras']);
+
+    const normalize = (s) => (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const tryCandidate = (candidate, source) => {
+        if (!candidate) return false;
+        const cand = candidate.toString().replace(/\s+/g, ' ').trim();
+        if (cand.length < 3 || cand.length > 80) return false;
+        const low = cand.toLowerCase();
+        if (invalidCharacterNames.has(low)) return false;
+        if (/d\s*&?\s*d beyond/i.test(low) || /https?:\/\//i.test(cand)) return false;
+        const normalized = normalize(cand);
+        if (normalized.length < 3) return false;
+        currentCharacterName = cand;
+        if (DDB_DEBUG) console.log('Character name found from', source, ':', currentCharacterName);
+        return true;
+    };
+    // Only use the DDB character header selector to find the character name.
+    try {
+        const hdr = document.querySelector('.ddbc-character-tidbits__heading h1, h1.styles_characterName__2x8wQ');
+        if (hdr && hdr.textContent && tryCandidate(hdr.textContent, 'character header (preferred)')) return true;
+    } catch (e) {
+        // ignore
+    }
+
+    if (DDB_DEBUG) console.log('Character name not found by preferred header selector');
+    return false;
+}
+let currentMapsSearchQuery = '';
+let currentMapsList = [];
+let currentMapsRenderedCharacter = null;
+let currentMapsRenderedState = null;
+let currentMapsSortDirection = 'none';
+let mapsCachePreloadStarted = false;
+let mapsCachePreloadPromise = null;
+let mapsCachePreloadFolderId = null;
+const MAPS_CACHE_WARMUP_TTL_MS = 30 * 60 * 1000;
+
+function getMapsWarmupState(folderId) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get('dndMapsWarmup', (result) => {
+            const state = result.dndMapsWarmup || {};
+            const entry = state[folderId];
+            if (!entry || !entry.completed || !entry.ts) {
+                resolve(null);
+                return;
+            }
+            const isFresh = (Date.now() - entry.ts) < MAPS_CACHE_WARMUP_TTL_MS;
+            resolve(isFresh ? entry : null);
+        });
+    });
+}
+
+function setMapsWarmupState(folderId, completed, entryCount) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get('dndMapsWarmup', (result) => {
+            const state = result.dndMapsWarmup || {};
+            state[folderId] = { ts: Date.now(), completed, entryCount };
+            chrome.storage.local.set({ dndMapsWarmup: state }, () => resolve());
+        });
+    });
+}
+
+async function preloadMapsCacheIfNeeded() {
+    if (!currentCharacterSettings || !currentCharacterSettings.folderId) {
+        return null;
+    }
+
+    const folderId = currentCharacterSettings.folderId;
+
+    if (mapsCachePreloadStarted) {
+        if (mapsCachePreloadFolderId === folderId) {
+            return mapsCachePreloadPromise;
+        }
+        return null;
+    }
+
+    const warmupState = await getMapsWarmupState(folderId);
+    if (warmupState) {
+        console.info(`[maps] skipping warmup for ${folderId}; cache is fresh`);
+        return null;
+    }
+
+    mapsCachePreloadStarted = true;
+    mapsCachePreloadFolderId = folderId;
+    const preloadStartedAt = performance.now();
+    console.info(`[maps] warming cache for ${folderId}`);
+
+    mapsCachePreloadPromise = fetchGoogleDriveMaps(folderId, () => {})
+        .then((maps) => {
+            return setMapsWarmupState(folderId, true, maps.length)
+                .then(() => {
+                    logMapsTiming('maps cache warmed', preloadStartedAt, `${maps.length} maps`);
+                    return maps;
+                });
+        })
+        .catch((error) => {
+            return setMapsWarmupState(folderId, false, 0)
+                .then(() => {
+                    console.warn('[maps] cache warm failed', error && error.message ? error.message : error);
+                    return [];
+                });
+        });
+
+    return mapsCachePreloadPromise;
+}
+
+function loadCharacterSettings() {
+    return new Promise((resolve) => {
+        if (!currentCharacterName) {
+            if (DDB_DEBUG) console.log('No character name available for settings');
+            currentCharacterSettings = null;
+            resolve(null);
+            return;
+        }
+        
+        chrome.storage.sync.get('characterMappings', (result) => {
+            const mappings = result.characterMappings || {};
+            if (DDB_DEBUG) console.log('Saved mapping keys:', Object.keys(mappings));
+            if (DDB_DEBUG) console.log('loadCharacterSettings: currentCharacterName:', currentCharacterName);
+            
+            // Only use an exact stored name match
+            if (mappings[currentCharacterName]) {
+                currentCharacterSettings = mappings[currentCharacterName];
+                if (DDB_DEBUG) console.log('Settings loaded for character (exact):', currentCharacterName, currentCharacterSettings);
+                resolve(currentCharacterSettings);
+                return;
+            }
+
+            currentCharacterSettings = null;
+            if (DDB_DEBUG) console.log('No exact Google Drive mapping for character:', currentCharacterName);
+            resolve(currentCharacterSettings);
+        });
+    });
+}
+
+// Inject Maps tab after Extras
+let tabsInjected = false;
+let mapsTabActive = false;
+let mapsUiObserver = null;
+let mapsResizeTimer = null;
+
+function injectMapsTab() {
+    const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+    
+    if (!tabsMenu) {
+        if (DDB_DEBUG) console.log('Tabs menu not found, retrying...');
+        setTimeout(injectMapsTab, 2000);
+        return;
+    }
+    
+    const existingMapsTab = tabsMenu.querySelector('[data-testid="MAPS"]');
+    if (existingMapsTab) {
+        if (DDB_DEBUG) console.log('Maps tab already exists');
+        tabsInjected = true;
+        setupMapsTabHandler();
+        return;
+    }
+    
+    try {
+        const mapsTabButton = document.createElement('button');
+        mapsTabButton.className = 'styles_tabButton__wvSLf';
+        mapsTabButton.setAttribute('role', 'radio');
+        mapsTabButton.setAttribute('aria-checked', 'false');
+        mapsTabButton.setAttribute('data-testid', 'MAPS');
+        mapsTabButton.textContent = 'Maps';
+        
+        const mapsTabLi = document.createElement('li');
+        mapsTabLi.appendChild(mapsTabButton);
+        
+        tabsMenu.appendChild(mapsTabLi);
+        
+        if (DDB_DEBUG) console.log('Maps tab injected successfully');
+        tabsInjected = true;
+        setupMapsTabHandler();
+    } catch (error) {
+        console.error('Error injecting Maps tab:', error);
+    }
+}
+
+// Setup Maps tab handler
+let tabHandlerSetup = false;
+function setupMapsTabHandler() {
+    const mapsTabButton = document.querySelector('[data-testid="MAPS"]');
+    
+    if (!mapsTabButton) {
+        if (DDB_DEBUG) console.log('Maps tab button not found, retrying...');
+        setTimeout(setupMapsTabHandler, 500);
+        return;
+    }
+    
+    if (mapsTabButton.dataset.mapsHandlerBound === 'true') {
+        setupGlobalTabHandlers();
+        setupMapsReactivity();
+        return;
+    }
+    
+    if (DDB_DEBUG) console.log('Maps tab button found, attaching click handler');
+    tabHandlerSetup = true;
+    
+    try {
+        mapsTabButton.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (DDB_DEBUG) console.log('Maps tab clicked');
+            updateTabSelection(mapsTabButton);
+            handleMapsTabClick();
+        });
+        mapsTabButton.dataset.mapsHandlerBound = 'true';
+        setupGlobalTabHandlers();
+        setupMapsReactivity();
+    } catch (error) {
+        console.error('Error setting up tab handler:', error);
+    }
+}
+
+function setupGlobalTabHandlers() {
+    if (window.__ddbMapsGlobalTabsHandlerBound) {
+        return;
+    }
+
+    document.body.addEventListener('click', (event) => {
+        const button = event.target.closest('button.styles_tabButton__wvSLf');
+        if (!button) {
+            return;
+        }
+
+        const dataTestId = button.getAttribute('data-testid');
+        if (DDB_DEBUG) console.log('Global tab click detected:', dataTestId || 'unknown');
+
+        if (dataTestId === 'MAPS') {
+            return;
+        }
+
+        mapsTabActive = false;
+
+        const root = findTabPanelsRoot();
+        const mapsContainers = root ? root.querySelectorAll('.ct-primary-box__tab-maps') : document.querySelectorAll('.ct-primary-box__tab-maps');
+        mapsContainers.forEach((mapsContainer) => {
+            mapsContainer.style.setProperty('display', 'none', 'important');
+        });
+        if (DDB_DEBUG) console.log('Maps containers hidden via global handler');
+
+        const allTabContainers = root ? root.querySelectorAll('[class*="ct-primary-box__tab"]:not(.ct-primary-box__tab-maps)') : document.querySelectorAll('[class*="ct-primary-box__tab"]:not(.ct-primary-box__tab-maps)');
+        allTabContainers.forEach(container => {
+            container.style.display = '';
+        });
+        console.log('Non-Maps containers re-enabled via global handler');
+
+        updateTabSelection(button);
+        clearMapsActiveFromTabs();
+    }, true);
+
+    window.__ddbMapsGlobalTabsHandlerBound = true;
+}
+
+function setupMapsReactivity() {
+    if (mapsUiObserver) {
+        return;
+    }
+
+    mapsUiObserver = new MutationObserver(() => {
+        if (document.querySelector('menu.styles_tabs__aTttL') && !document.querySelector('[data-testid="MAPS"]')) {
+            injectMapsTab();
+        }
+
+        if (mapsTabActive) {
+            scheduleMapsRecovery();
+        }
+    });
+
+    const observerTarget = document.body;
+    if (observerTarget) {
+        mapsUiObserver.observe(observerTarget, { childList: true, subtree: true });
+    }
+
+    window.addEventListener('resize', scheduleMapsRecovery);
+}
+
+function scheduleMapsRecovery() {
+    if (mapsResizeTimer) {
+        clearTimeout(mapsResizeTimer);
+    }
+
+    mapsResizeTimer = setTimeout(() => {
+        const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+        if (!tabsMenu) {
+            return;
+        }
+
+        if (!document.querySelector('[data-testid="MAPS"]')) {
+            injectMapsTab();
+            return;
+        }
+
+        if (mapsTabActive) {
+            const mapsTab = document.querySelector('[data-testid="MAPS"]');
+            if (mapsTab) {
+                updateTabSelection(mapsTab);
+                const mapsContainer = ensureMapsPanelVisible();
+                if (mapsContainer) {
+                    mapsContainer.style.display = 'block';
+                }
+            }
+        }
+    }, 150);
+}
+
+function ensureMapsPanelVisible() {
+    // The MAPS tab content should live as a sibling to the existing tab panels,
+    // not inside the currently visible panel itself.
+    const root = findTabPanelsRoot();
+    if (!root) return null;
+    const mapsTabContainerSelector = '.ct-primary-box__tab-maps';
+    let mapsTabContainer = root.querySelector(mapsTabContainerSelector);
+
+    if (mapsTabActive) {
+        hideNonMapsTabContainers(root);
+        populateMapsContent(root);
+
+        mapsTabContainer = root.querySelector(mapsTabContainerSelector);
+        if (mapsTabContainer) {
+            mapsTabContainer.style.setProperty('display', 'block', 'important');
+            mapsTabContainer.style.setProperty('visibility', 'visible', 'important');
+            mapsTabContainer.style.setProperty('opacity', '1', 'important');
+            mapsTabContainer.style.setProperty('position', 'relative', 'important');
+            mapsTabContainer.style.setProperty('z-index', '10000', 'important');
+            mapsTabContainer.style.setProperty('min-height', '0', 'important');
+            mapsTabContainer.style.setProperty('background', 'transparent', 'important');
+            mapsTabContainer.style.setProperty('width', '100%', 'important');
+        }
+
+        return mapsTabContainer || root.querySelector('.ct-maps-section') || null;
+    } else {
+        if (mapsTabContainer) {
+            mapsTabContainer.style.setProperty('display', 'none', 'important');
+        }
+        return mapsTabContainer || null;
+    }
+}
+
+function findTabPanelsRoot() {
+    const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+    if (tabsMenu) {
+        const tabSection = tabsMenu.closest('section, div, main');
+        if (tabSection) {
+            const contentPanel = tabSection.querySelector('div[class*="ct-primary-box__tab-"]');
+            if (contentPanel && contentPanel.parentElement) {
+                return contentPanel.parentElement;
+            }
+            const fallbackPanelRoot = tabSection.querySelector('div[class*="ct-primary-box"]');
+            if (fallbackPanelRoot) {
+                return fallbackPanelRoot;
+            }
+            return tabSection;
+        }
+    }
+    return document.querySelector('.ct-primary-box__content, .ct-primary-box, main') || document.body;
+}
+
+function updateTabSelection(selectedButton) {
+    const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+    if (!tabsMenu) {
+        return;
+    }
+
+    const tabButtons = tabsMenu.querySelectorAll('button.styles_tabButton__wvSLf');
+    tabButtons.forEach((tabButton) => {
+        const isSelected = tabButton === selectedButton;
+        tabButton.setAttribute('role', 'radio');
+        tabButton.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+
+        if (tabButton.getAttribute('data-testid') === 'MAPS') {
+            tabButton.classList.toggle('maps-active', isSelected);
+        } else {
+            tabButton.classList.remove('maps-active');
+        }
+    });
+}
+
+function clearMapsActiveFromTabs() {
+    const activeMapButtons = document.querySelectorAll('button.styles_tabButton__wvSLf.maps-active');
+    activeMapButtons.forEach((button) => button.classList.remove('maps-active'));
+}
+
+
+// Handle Maps tab click
+let isHandlingMapsClick = false;
+
+function findVisibleTabContentParent() {
+    const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+    if (tabsMenu) {
+        const tabSection = tabsMenu.closest('section, div, main');
+        if (tabSection) {
+            const panelCandidates = Array.from(tabSection.querySelectorAll('div[class*="ct-primary-box__tab-"]'));
+            if (panelCandidates.length) {
+                const visiblePanel = panelCandidates.find(panel => {
+                    const style = getComputedStyle(panel);
+                    return style.display !== 'none' && style.visibility !== 'hidden' && panel.offsetWidth > 0 && panel.offsetHeight > 0;
+                }) || panelCandidates[0];
+
+                if (visiblePanel && visiblePanel.parentElement && visiblePanel.parentElement !== document.body) {
+                    return visiblePanel.parentElement;
+                }
+                return visiblePanel;
+            }
+
+            const fallbackPanelRoot = tabSection.querySelector('div[class*="ct-primary-box"]');
+            if (fallbackPanelRoot) {
+                return fallbackPanelRoot;
+            }
+            return tabSection;
+        }
+    }
+
+    const fallback = document.querySelector('.ct-primary-box__content, .ct-primary-box, main');
+    return fallback || document.body;
+}
+
+function hideNonMapsTabContainers(root) {
+    // Only hide sibling tab panels inside the provided root (tab panels container).
+    // If no root is provided, fall back to global behavior but warn.
+    const selector = '[class*="ct-primary-box__tab-"]:not(.ct-primary-box__tab-maps)';
+    let containers = [];
+    if (root) {
+        containers = Array.from(root.querySelectorAll(selector));
+        if (!containers.length) {
+            containers = Array.from(root.children).filter(c => c.className && c.className.indexOf('ct-primary-box__tab-') !== -1 && c.className.indexOf('ct-primary-box__tab-maps') === -1);
+        }
+    } else {
+        console.warn('hideNonMapsTabContainers called without root; hiding globally');
+        containers = Array.from(document.querySelectorAll(selector));
+    }
+
+    if (DDB_DEBUG) console.log('Hiding non-Maps tab containers:', containers.length);
+    containers.forEach(container => {
+        container.style.display = 'none';
+    });
+}
+
+function handleMapsTabClick() {
+    try {
+        if (DDB_DEBUG) console.log('handleMapsTabClick called');
+        isHandlingMapsClick = true;
+        mapsTabActive = true;
+
+        const mapsTab = document.querySelector('[data-testid="MAPS"]');
+        if (mapsTab) {
+            updateTabSelection(mapsTab);
+            if (DDB_DEBUG) console.log('Maps tab visually activated');
+        }
+
+        const root = findTabPanelsRoot();
+        hideNonMapsTabContainers(root);
+
+        const mapsContainer = ensureMapsPanelVisible();
+        if (mapsContainer) {
+            mapsContainer.style.display = 'block';
+            if (DDB_DEBUG) console.log('Maps container displayed');
+        } else {
+            if (DDB_DEBUG) console.log('Maps container not available to display');
+        }
+
+        if (DDB_DEBUG) console.log('handleMapsTabClick completed');
+        isHandlingMapsClick = false;
+    } catch (error) {
+        console.error('Error in handleMapsTabClick:', error);
+        isHandlingMapsClick = false;
+    }
+}
+
+// Populate maps content matching Extras structure
+function populateMapsContent(container) {
+    if (DDB_DEBUG) console.log('populateMapsContent called with container:', container);
+    
+    // `container` is expected to be the parent that contains tab panels.
+    // Create (or reuse) a child tab container that matches D&D Beyond's
+    // `.ct-primary-box__tab ct-primary-box__tab--maps` structure so we don't
+    // overwrite sibling tab content.
+    const parent = container;
+    const mapsTabSelector = '.ct-primary-box__tab-maps';
+    let mapsTab = parent.querySelector(mapsTabSelector);
+
+    if (!mapsTab) {
+        mapsTab = document.createElement('div');
+        mapsTab.className = 'ct-primary-box__tab-maps';
+        parent.appendChild(mapsTab);
+    }
+
+    // If the maps section already exists inside the mapsTab, ensure it is visible.
+    const existingContent = mapsTab.querySelector('.ct-maps-section');
+    if (existingContent) {
+        if (DDB_DEBUG) console.log('Maps content already exists inside maps tab, restoring visibility');
+        mapsTab.style.setProperty('display', 'block', 'important');
+        existingContent.style.setProperty('display', '', 'important');
+        ensureMapsContentLoaded(mapsTab);
+        return mapsTab;
+    }
+
+    mapsTab.style.setProperty('display', 'block', 'important');
+    mapsTab.style.setProperty('visibility', 'visible', 'important');
+    mapsTab.style.setProperty('opacity', '1', 'important');
+    mapsTab.style.setProperty('position', 'relative', 'important');
+    mapsTab.style.setProperty('z-index', '1000', 'important');
+    mapsTab.style.setProperty('background', '#fff', 'important');
+
+    mapsTab.dataset.mapsContentRendered = 'true';
+
+    mapsTab.innerHTML = `
+            <section class="ct-extras ct-maps-section" style="padding: 0 20px 20px; display: flex; flex-direction: column; min-height: 100%; height: 100%; width: 100%; box-sizing: border-box;">
+                <h2 class="accessibility_screenreaderOnly__OEzRB">Maps</h2>
+
+                <div class="ct-equipment__filter" style="margin-bottom: 16px; width: 100%; display: flex; align-items: center; gap: 8px;">
+                    <div class="ct-inventory-filter" style="width: 100%; flex: 1 1 auto;">
+                        <div class="ct-inventory-filter__interactions" style="width: 100%;">
+                            <div class="ct-inventory-filter__box" style="width: 100%;">
+                                <div class="ct-inventory-filter__primary" style="width: 100%; display: flex; align-items: center; gap: 8px;">
+                                    <div class="ct-inventory-filter__primary-group ct-inventory-filter__primary-group--first" style="display: flex; align-items: center; justify-content: center;">
+                                        <div class="ct-inventory-filter__icon"></div>
+                                    </div>
+                                    <div class="ct-inventory-filter__field" style="flex: 1 1 auto;">
+                                        <input class="ct-inventory-filter__input" placeholder="Search map names" type="search" value="" aria-label="Search maps by name">
+                                    </div>
+                                    <div class="ct-inventory-filter__clear" style="display: none;">Clear X</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="ct-maps-sort-button" type="button" aria-label="Sort maps" title="Sort maps alphabetically" style="background: transparent; border: none; box-shadow: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; transform: translateY(-6px); cursor: pointer; font-size: 26px; font-weight: 1000; color: #000; padding: 0; line-height: 1; flex-shrink: 0;">⇅</button>
+                </div>
+
+                <div class="ct-extras__content" id="maps-content-area" style="
+                    display: grid;
+                    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                    gap: 15px;
+                    min-height: 0;
+                    flex: 1 1 auto;
+                    width: 100%;
+                    overflow-y: auto;
+                    overflow-x: hidden;
+                    padding: 0 0 18px 0;
+                    box-sizing: border-box;
+                ">
+                </div>
+
+                <div class="ct-extras__empty" id="maps-empty-state" style="margin-top: 20px; display:none;"></div>
+            </section>
+    `;
+
+    if (DDB_DEBUG) console.log('Maps content populated inside maps tab');
+    setupMapsSearch(mapsTab);
+    loadCharacterSettings().then(() => {
+        loadStoredMaps(mapsTab);
+    });
+
+    return mapsTab;
+}
+
+function setupMapsSearch(mapsTab) {
+    const searchInput = mapsTab.querySelector('.ct-inventory-filter__input');
+    const clearButton = mapsTab.querySelector('.ct-inventory-filter__clear');
+    const filterWrapper = mapsTab.querySelector('.ct-inventory-filter');
+    const sortButton = mapsTab.querySelector('.ct-maps-sort-button');
+    if (!searchInput || searchInput.dataset.mapsSearchBound === 'true' || !clearButton || !filterWrapper) {
+        return;
+    }
+
+    const contentArea = mapsTab.querySelector('#maps-content-area');
+    const emptyState = mapsTab.querySelector('#maps-empty-state');
+    if (!contentArea || !emptyState) {
+        return;
+    }
+
+    searchInput.dataset.mapsSearchBound = 'true';
+    clearButton.dataset.mapsClearBound = 'true';
+    clearButton.style.display = 'none';
+    filterWrapper.classList.remove('ct-inventory-filter--has-filter');
+
+    const updateSearch = (value) => {
+        currentMapsSearchQuery = (value || '').toLowerCase().trim();
+        const hasFilter = currentMapsSearchQuery.length > 0;
+        clearButton.style.display = hasFilter ? 'inline-block' : 'none';
+        filterWrapper.classList.toggle('ct-inventory-filter--has-filter', hasFilter);
+        displayMaps(currentMapsList, contentArea, emptyState);
+    };
+
+    searchInput.addEventListener('input', (event) => {
+        updateSearch(event.target.value);
+    });
+
+    clearButton.addEventListener('click', () => {
+        searchInput.value = '';
+        updateSearch('');
+        searchInput.focus();
+    });
+
+    // Helper: detect Underdark (dark) mode by checking character sheet computed color
+    function isUnderdarkActive() {
+        const characterSheet = document.querySelector('.ct-character-sheet');
+        if (!characterSheet) return false;
+        const textColor = window.getComputedStyle(characterSheet).color;
+        return textColor === 'rgb(162, 172, 178)';
+    }
+
+    // Update the sort arrow color to match light/dark mode. Don't inject SVGs;
+    // just color the existing arrow glyph so it follows the theme.
+    function updateSortButtonColor() {
+        if (!sortButton) return;
+        const dark = isUnderdarkActive();
+        let arrowSpan = sortButton.querySelector('.ct-maps-sort-arrow');
+        if (!arrowSpan) {
+            arrowSpan = document.createElement('span');
+            arrowSpan.className = 'ct-maps-sort-arrow';
+            arrowSpan.style.cssText = 'margin-left:6px;font-size:20px;line-height:1;display:inline-block;';
+            arrowSpan.textContent = '⇅';
+            // reset button content and append arrow span
+            sortButton.innerHTML = '';
+            sortButton.appendChild(arrowSpan);
+        }
+        const color = dark ? '#ffffff' : '#242528';
+        arrowSpan.style.color = color;
+        sortButton.style.color = color;
+    }
+
+    // Initialize color and observe theme changes on the character sheet
+    updateSortButtonColor();
+    try {
+        const sheetNode = document.querySelector('.ct-character-sheet');
+        if (sheetNode) {
+            const sheetObserver = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    if (m.type === 'attributes') {
+                        updateSortButtonColor();
+                        break;
+                    }
+                }
+            });
+            sheetObserver.observe(sheetNode, { attributes: true, attributeFilter: ['class', 'style'] });
+        } else {
+            const bodyObserver = new MutationObserver((mutations, obs) => {
+                if (document.querySelector('.ct-character-sheet')) {
+                    updateSortButtonColor();
+                    obs.disconnect();
+                }
+            });
+            bodyObserver.observe(document.body, { childList: true, subtree: true });
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    if (sortButton) {
+        sortButton.addEventListener('click', () => {
+            const nextDirection = currentMapsSortDirection === 'asc' ? 'desc' : (currentMapsSortDirection === 'desc' ? 'none' : 'asc');
+            currentMapsSortDirection = nextDirection;
+            const arrowSpan = sortButton.querySelector('.ct-maps-sort-arrow');
+            if (arrowSpan) arrowSpan.textContent = nextDirection === 'asc' ? '↑' : (nextDirection === 'desc' ? '↓' : '⇅');
+            sortButton.title = nextDirection === 'asc' ? 'Sort Z-A' : (nextDirection === 'desc' ? 'Reset sort order' : 'Sort A-Z');
+            if (currentMapsList.length > 0) {
+                displayMaps(currentMapsList, contentArea, emptyState);
+            }
+        });
+    }
+}
+
+function ensureMapsContentLoaded(mapsTab) {
+    const contentArea = mapsTab.querySelector('#maps-content-area');
+    const emptyState = mapsTab.querySelector('#maps-empty-state');
+    if (!contentArea || !emptyState) {
+        return;
+    }
+
+    const isEmpty = contentArea.children.length === 0 || contentArea.style.display === 'none';
+    const hasActiveSearch = (currentMapsSearchQuery || '').trim().length > 0;
+    const currentState = currentCharacterSettings ? 'mapped' : 'no-mapping';
+
+    if (isEmpty && !hasActiveSearch && (currentMapsRenderedCharacter !== currentCharacterName || currentMapsRenderedState !== currentState)) {
+        loadStoredMaps(mapsTab);
+    }
+}
+
+// Maps are shown directly from the configured Google Drive folder.
+function setupMapsUpload(container) {
+    if (DDB_DEBUG) console.log('Maps upload setup skipped for this view');
+}
+
+// Load and display stored maps
+function loadStoredMaps(container) {
+    if (!container) return;
+    
+    const contentArea = container.querySelector('#maps-content-area');
+    const emptyState = container.querySelector('#maps-empty-state');
+    if (!contentArea || !emptyState) return;
+
+    const contentState = currentCharacterSettings ? 'mapped' : 'no-mapping';
+    if (currentCharacterName === currentMapsRenderedCharacter && contentState === currentMapsRenderedState) {
+        if (DDB_DEBUG) console.log('Maps already rendered for current character state; skipping repeated reload');
+        return;
+    }
+
+    currentMapsRenderedCharacter = currentCharacterName;
+    currentMapsRenderedState = contentState;
+
+    if (DDB_DEBUG) console.log('loadStoredMaps called with container:', !!container);
+    if (DDB_DEBUG) console.log('Content area found:', !!contentArea);
+    if (DDB_DEBUG) console.log('Empty state found:', !!emptyState);
+
+    // Check if there's a Google Drive mapping for this character
+    if (DDB_DEBUG) console.log('Current character settings:', currentCharacterSettings);
+    if (currentCharacterSettings && currentCharacterSettings.folderId) {
+        if (DDB_DEBUG) console.log('Google Drive mapping found, loading from Drive:', currentCharacterSettings.folderId);
+        loadMapsFromGoogleDrive(container, contentArea, emptyState);
+        return;
+    }
+
+    if (!currentCharacterName) {
+        if (DDB_DEBUG) console.log('No character name detected on page; prompting user to add mapping in Options');
+        showMapsOptionsPrompt(contentArea, emptyState, 'Character name not detected.', 'The extension could not find the character name on this page. Open extension Options and add a mapping linking your character\'s D&D Beyond name to a Google Drive folder.');
+        return;
+    }
+
+    if (!currentCharacterSettings) {
+        if (DDB_DEBUG) console.log('Character name detected but no matching mapping found; guiding user to Options');
+        showMapsOptionsPrompt(contentArea, emptyState, 'No mapping found for this character.', `The character name <strong>${escapeHtml(currentCharacterName)}</strong> does not match any configured mapping. Open extension Options to add or update the character-to-folder mapping.`);
+        return;
+    }
+
+    // Otherwise, load from local storage
+    chrome.storage.local.get('dndMaps', (result) => {
+        const maps = result.dndMaps || [];
+        if (DDB_DEBUG) console.log('Retrieved maps from storage:', maps.length);
+        displayMaps(maps, contentArea, emptyState);
+    });
+}
+
+// Load maps from Google Drive
+function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
+    const loadStartedAt = performance.now();
+    console.info('[maps] load start', currentCharacterSettings.folderId);
+    
+    contentArea.innerHTML = '';
+    contentArea.style.display = 'grid';
+    // Show a lightweight loading message until the first thumbnail appears
+    let loadingDiv = document.createElement('div');
+    loadingDiv.id = 'maps-loading';
+    loadingDiv.className = 'ct-maps-loading';
+    loadingDiv.textContent = 'Retrieving maps from Google Drive…';
+    // D&D-themed parchment style, matches prompts used elsewhere in the extension
+    loadingDiv.style.cssText = [
+        'width:100%',
+        'box-sizing:border-box',
+        'padding:10px 14px',
+        'margin:10px 0',
+        'background:#fff8e1',
+        'border:1px solid #d6c089',
+        'border-radius:8px',
+        'color:#3b2a0a',
+        'font-size:14px',
+        'font-weight:600',
+        'line-height:1.2',
+        'box-shadow: 0 1px 0 rgba(0,0,0,0.02) inset'
+    ].join(';');
+    try {
+        if (contentArea && contentArea.parentElement) contentArea.parentElement.insertBefore(loadingDiv, contentArea);
+    } catch (e) { /* ignore */ }
+    
+    // (no loading text — keep UI minimal; incremental results will appear as they load)
+    // (no persistent status element — incremental results append without flashing)
+    
+    // Fetch images from Google Drive with incremental progress
+    currentMapsList = [];
+    const accumulated = { maps: [], seen: new Set() };
+    let appendedAny = false;
+    let firstRenderLogged = false;
+
+    const onProgress = (info) => {
+        try {
+            const newEntries = info && info.newEntries ? info.newEntries : [];
+            const added = [];
+            for (const e of newEntries) {
+                if (!accumulated.seen.has(e.id)) {
+                    accumulated.seen.add(e.id);
+                    const imageUrls = buildGoogleDriveImageUrls(e.id);
+                    const fullResolutionUrl = buildGoogleDriveFullResolutionUrl(e.id);
+                    const mapObj = {
+                        id: e.id,
+                        name: e.name || `Google Drive Map ${accumulated.maps.length + 1}`,
+                        url: imageUrls[0],
+                        imageUrls,
+                        fullResolutionUrl,
+                        type: 'image/*',
+                        source: 'google-drive'
+                    };
+                    accumulated.maps.push(mapObj);
+                    currentMapsList.push(mapObj);
+                    added.push(mapObj);
+                }
+            }
+            if (added.length > 0) {
+                appendedAny = true;
+                // remove loading message as soon as first thumbnails are available
+                try { if (loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (er) { /* ignore */ }
+                if (!firstRenderLogged) {
+                    firstRenderLogged = true;
+                    logMapsTiming('first cards rendered', loadStartedAt);
+                }
+                appendMapCards(added, contentArea);
+            }
+        } catch (e) {
+            debugLog('onProgress handler error', e && e.message);
+        }
+    };
+
+    fetchGoogleDriveMaps(currentCharacterSettings.folderId, onProgress)
+        .then(maps => {
+            debugLog('Google Drive maps retrieved:', maps.length);
+            // Clear any loading indicator if present (none by default)
+            try { if (typeof loadingDiv !== 'undefined' && loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (e) { /* ignore */ }
+
+            if (!maps || maps.length === 0) {
+                contentArea.style.display = 'none';
+                if (emptyState) {
+                    emptyState.innerHTML = 'No maps found in your Google Drive folder.<br><small>Make sure it contains PNG, JPEG, or BMP images.</small>';
+                    emptyState.style.display = 'block';
+                }
+                return;
+            }
+
+            contentArea.style.display = 'grid';
+            if (emptyState) emptyState.style.display = 'none';
+
+            if (!appendedAny) {
+                displayMaps(maps, contentArea, emptyState);
+            }
+            logMapsTiming('maps load complete', loadStartedAt, `${maps.length} maps`);
+        })
+        .catch(error => {
+            console.error('Error loading Google Drive maps:', error);
+            try { if (typeof loadingDiv !== 'undefined' && loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (e) { /* ignore */ }
+            contentArea.innerHTML = '';
+            contentArea.style.display = 'grid';
+            if (emptyState) {
+                const errMsg = (error && (error.error || error.message)) ? (error.error || error.message) : (typeof error === 'string' ? error : JSON.stringify(error));
+                let diagnosticHtml = '';
+                if (error && Array.isArray(error.attempts) && error.attempts.length > 0) {
+                    diagnosticHtml = '<div style="margin-top:8px;font-size:13px;color:#4a412f;">Fetch attempts:<ul style="margin:6px 0;padding-left:18px;">';
+                    for (const a of error.attempts) {
+                        const statusText = a.ok ? `OK (${a.status || ''})` : (a.status ? `Failed (${a.status})` : 'Failed');
+                        const errText = a.error ? ` - ${escapeHtml(a.error)}` : '';
+                        diagnosticHtml += `<li><strong>${escapeHtml(a.url)}</strong> [${escapeHtml(a.used || '')}] ${escapeHtml(statusText)}${errText}</li>`;
+                    }
+                    diagnosticHtml += '</ul></div>';
+                }
+
+                emptyState.innerHTML = `⚠️ Could not load maps from Google Drive: ${escapeHtml(errMsg)}<br><small>Please check your settings and make sure the folder is accessible.</small><br><a href="https://drive.google.com/drive/folders/${currentCharacterSettings.folderId}" target="_blank" style="color:#4f8ef7;">Open folder in Google Drive</a>${diagnosticHtml}`;
+                emptyState.style.display = 'block';
+            }
+        });
+}
+
+function buildGoogleDriveImageUrls(fileId) {
+    // Prefer smaller Drive thumbnails first for faster preview loading,
+    // then fall back to view/download URLs if needed.
+    return [
+        `https://drive.google.com/thumbnail?authuser=0&sz=w800&id=${fileId}`,
+        `https://drive.google.com/thumbnail?authuser=0&sz=w1600&id=${fileId}`,
+        `https://drive.google.com/thumbnail?authuser=0&sz=w2048&id=${fileId}`,
+        `https://drive.google.com/uc?export=view&id=${fileId}&authuser=0`,
+        `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`,
+        `https://lh3.googleusercontent.com/d/${fileId}`
+    ];
+}
+
+function buildGoogleDriveFullResolutionUrl(fileId) {
+    return [
+        `https://lh3.googleusercontent.com/d/${fileId}`,
+        `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`,
+        `https://drive.google.com/uc?export=view&id=${fileId}&authuser=0`
+    ][0];
+}
+
+async function fetchGoogleDriveMaps(folderId, onProgress) {
+    const fetchStartedAt = performance.now();
+    // If subfolder crawling is enabled per-mapping, use recursive crawler
+    const seenIds = new Set();
+    const maps = [];
+    let fileEntries = [];
+    try {
+        const searchSubfolders = (currentCharacterSettings && typeof currentCharacterSettings.searchSubfolders !== 'undefined') ? !!currentCharacterSettings.searchSubfolders : true;
+        const subfolderDepth = (currentCharacterSettings && currentCharacterSettings.subfolderDepth) ? Math.max(1, Math.min(6, parseInt(currentCharacterSettings.subfolderDepth, 10) || 3)) : 3;
+        if (searchSubfolders) {
+            debugLog('fetchGoogleDriveMaps: starting recursive crawl, depth=', subfolderDepth);
+            const entries = await crawlDriveFolder(folderId, subfolderDepth, new Set(), onProgress);
+            fileEntries = entries || [];
+        } else {
+            const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
+            if (!html) {
+                console.warn('No HTML returned for Google Drive folder fetch.');
+                return [];
+            }
+            fileEntries = extractGoogleDriveFileEntries(html, folderId);
+        }
+        debugLog('Extracted file entries from HTML:', fileEntries);
+    } catch (err) {
+        console.error('Error during fetchGoogleDriveMaps crawl:', err);
+        return [];
+    }
+    fileEntries.forEach((entry) => {
+        const fileId = entry.id;
+        if (seenIds.has(fileId)) {
+            return;
+        }
+        seenIds.add(fileId);
+
+        const imageUrls = buildGoogleDriveImageUrls(fileId);
+        const fullResolutionUrl = buildGoogleDriveFullResolutionUrl(fileId);
+        maps.push({
+            id: fileId,
+            name: entry.name || `Google Drive Map ${maps.length + 1}`,
+            url: imageUrls[0],
+            imageUrls,
+            fullResolutionUrl,
+            type: 'image/*',
+            source: 'google-drive'
+        });
+    });
+
+    return maps;
+}
+
+// Cache helpers for folder HTML parse results
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+function getCachedFolderStore() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get('dndMaps', (res) => {
+            resolve(res.dndMaps || {});
+        });
+    });
+}
+
+function setCachedFolderData(folderId, data) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get('dndMaps', (res) => {
+            const store = res.dndMaps || {};
+            store[folderId] = data;
+            chrome.storage.local.set({ dndMaps: store }, () => resolve());
+        });
+    });
+}
+
+function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
+    const requestStartedAt = performance.now();
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            reject(new Error('fetch-timeout'));
+        }, timeoutMs);
+
+        requestDriveFolderHtml(folderId)
+            .then((html) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                const elapsed = performance.now() - requestStartedAt;
+                if (elapsed >= 2000) {
+                    console.info(`[maps] folder HTML fetch slow: ${Math.round(elapsed)}ms for ${folderId}`);
+                }
+                resolve(html);
+            })
+            .catch((err) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                reject(err);
+            });
+    });
+}
+
+// Crawl using breadth-first depth waves so top-level folders are processed first.
+async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) {
+    const crawlStartedAt = performance.now();
+    const results = [];
+    if (!rootFolderId) return results;
+    const visitedFolders = visitedSet || new Set();
+    const seenFileIds = new Set();
+    const queue = [{ id: rootFolderId, depth: 0 }];
+    const cachedStore = await getCachedFolderStore();
+    let scanned = 0;
+
+    const processFolder = async (folderId, depthLeft) => {
+        if (!folderId || visitedFolders.has(folderId)) return;
+        visitedFolders.add(folderId);
+        const folderStartAt = performance.now();
+
+        try {
+            const cached = cachedStore[folderId];
+            if (cached && (Date.now() - (cached.ts || 0) < CACHE_TTL_MS)) {
+                const entries = cached.entries || [];
+                const subfolders = cached.subfolders || [];
+                for (const e of entries) {
+                    if (!seenFileIds.has(e.id)) {
+                        seenFileIds.add(e.id);
+                        results.push(e);
+                    }
+                }
+                scanned += 1;
+                if (entries.length > 0 || subfolders.length > 0) {
+                    console.info(`[maps] cached folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, entries=${entries.length}, subfolders=${subfolders.length}`);
+                }
+                onProgress && onProgress({ newEntries: entries, folderId, scanned });
+                if (depthLeft < maxDepth) {
+                    for (const sf of subfolders) {
+                        if (!visitedFolders.has(sf)) queue.push({ id: sf, depth: depthLeft + 1 });
+                    }
+                }
+                return;
+            }
+        } catch (cerr) {
+            debugLog('cache read failed', folderId, cerr && cerr.message);
+        }
+
+        try {
+            const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
+            const parseStartAt = performance.now();
+            const entries = extractGoogleDriveFileEntries(html, folderId) || [];
+            const parseElapsed = Math.round(performance.now() - parseStartAt);
+            if (parseElapsed >= 250) {
+                console.info(`[maps] parse folder ${folderId}: ${parseElapsed}ms, entries=${entries.length}`);
+            }
+            const subfolders = (depthLeft < maxDepth) ? extractSubfolderIdsFromHtml(html, folderId) : [];
+
+            const cacheData = { ts: Date.now(), entries, subfolders };
+            cachedStore[folderId] = cacheData;
+            setCachedFolderData(folderId, cacheData).catch((e) => debugLog('cache save failed', e && e.message));
+
+            const newEntries = [];
+            for (const e of entries) {
+                if (!seenFileIds.has(e.id)) {
+                    seenFileIds.add(e.id);
+                    results.push(e);
+                    newEntries.push(e);
+                }
+            }
+
+            scanned += 1;
+            console.info(`[maps] folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, entries=${entries.length}, subfolders=${subfolders.length}`);
+            onProgress && onProgress({ newEntries, folderId, scanned });
+
+            if (depthLeft < maxDepth) {
+                for (const sf of subfolders) {
+                    if (!visitedFolders.has(sf)) queue.push({ id: sf, depth: depthLeft + 1 });
+                }
+            }
+        } catch (err) {
+            debugLog('crawlDriveFolder fetch failed for', folderId, err && err.message);
+            scanned += 1;
+            console.info(`[maps] folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, failed`);
+            onProgress && onProgress({ newEntries: [], folderId, scanned });
+        }
+    };
+
+    let currentDepth = 0;
+    while (queue.length > 0 && currentDepth <= maxDepth) {
+        const currentBatch = [];
+        while (queue.length > 0 && queue[0].depth === currentDepth) {
+            currentBatch.push(queue.shift());
+        }
+
+        if (currentBatch.length === 0) {
+            currentDepth += 1;
+            continue;
+        }
+
+        await Promise.all(currentBatch.map((item) => processFolder(item.id, item.depth)));
+        currentDepth += 1;
+    }
+
+    logMapsTiming('Drive crawl complete', crawlStartedAt, `${results.length} results`);
+    return results;
+}
+
+function requestDriveFolderHtml(folderId) {
+    return new Promise((resolve, reject) => {
+        debugLog('Requesting Drive folder HTML from background for folderId:', folderId);
+        chrome.runtime.sendMessage(
+            { action: 'fetchDriveFolderHtml', folderId },
+            (response) => {
+                if (DDB_DEBUG) console.log('Background response for Drive folder HTML:', response);
+
+                if (chrome.runtime.lastError) {
+                        reject({ success: false, error: chrome.runtime.lastError.message });
+                    return;
+                }
+
+                    if (!response || !response.success) {
+                        // Reject with the full response object so callers can show diagnostic info
+                        reject(response || { success: false, error: 'Background fetch failed' });
+                        return;
+                    }
+
+                    resolve(response.html || '');
+            }
+        );
+    });
+}
+
+
+
+function extractSubfolderIdsFromHtml(html, parentFolderId) {
+    const ids = new Set();
+    if (!html) return [];
+    const regex = /(?:drive\.google\.com[\/]drive|\/drive)?\/folders\/([a-zA-Z0-9_-]{25,})/gi;
+    let m;
+    while ((m = regex.exec(html)) !== null) {
+        const id = m[1];
+        if (!id) continue;
+        if (id === parentFolderId) continue;
+        if (id.length < 25) continue;
+        ids.add(id);
+    }
+    return Array.from(ids);
+}
+
+function extractGoogleDriveFileEntries(html, folderId) {
+    const fileEntries = [];
+    const seenIds = new Set();
+    const normalizedFolderId = folderId ? folderId.toString().trim() : null;
+
+    const isLikelyDriveId = (candidate) => {
+        if (!candidate || candidate === normalizedFolderId) return false;
+        if (candidate.startsWith('AIza')) return false;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) return false; // GUIDs
+        if (candidate.length < 25 || candidate.length > 80) return false;
+        return true;
+    };
+
+    const decodeHtmlEntities = (value) => {
+        return (value || '')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&nbsp;/g, ' ');
+    };
+
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
+    const hasImageExtension = (value) => {
+        if (!value) return false;
+        const cleaned = decodeHtmlEntities(value.toString().replace(/<[^>]+>/g, '').trim()).trim();
+        const match = cleaned.match(/\.([a-z0-9]+)(?:[\?#].*)?$/i);
+        return !!(match && imageExtensions.includes(match[1].toLowerCase()));
+    };
+
+    const sanitizeFileName = (value) => {
+        const cleaned = decodeHtmlEntities((value || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+        if (!cleaned) return null;
+        const stripped = cleaned.replace(/\.[^.]+$/, '').trim();
+        const lower = stripped.toLowerCase();
+        if (!stripped || lower === 'share' || lower === 'shared' || lower === 'share link' || lower === 'download' || lower === 'open' || lower === 'preview' || lower === 'image') {
+            return null;
+        }
+        return stripped;
+    };
+
+    const extractImageNameFromHtml = (html) => {
+        if (!html) return null;
+        const fallbackPattern = /([\w\-\s\.\(\)\[\]%]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:[\?#][^\s"'<>]*)?/gi;
+        let match;
+        while ((match = fallbackPattern.exec(html)) !== null) {
+            const candidate = match[1];
+            if (hasImageExtension(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    };
+
+    const addEntry = (candidate, candidateName, rowHtml) => {
+        if (!isLikelyDriveId(candidate) || seenIds.has(candidate)) {
+            return;
+        }
+
+        let nameToUse = candidateName;
+        if (!nameToUse && rowHtml) {
+            nameToUse = extractImageNameFromHtml(rowHtml);
+        }
+        if (!nameToUse || !hasImageExtension(nameToUse)) {
+            return;
+        }
+
+        const sanitized = sanitizeFileName(nameToUse);
+        if (!sanitized) {
+            return;
+        }
+
+        seenIds.add(candidate);
+        fileEntries.push({
+            id: candidate,
+            name: sanitized,
+            originalName: nameToUse
+        });
+    };
+
+    const tryExtractNameFromRow = (rowHtml) => {
+        const namePatterns = [
+            /data-tooltip=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
+            /title=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
+            /aria-label=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
+            />([^<]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:<|$)/i
+        ];
+
+        for (const pattern of namePatterns) {
+            const match = pattern.exec(rowHtml);
+            if (match && match[1]) {
+                const name = sanitizeFileName(match[1]);
+                if (name) {
+                    return name;
+                }
+            }
+        }
+
+        return null;
+    };
+
+    // Handle Drive's embedded folder list view entries like <div class="flip-entry" id="entry-<ID>">
+    const flipEntryRegex = /<div\s+class=["']flip-entry["'][^>]*id=["']entry-([a-zA-Z0-9_-]{25,})["'][^>]*>[\s\S]*?<div\s+class=["']flip-entry-title["']\s*>([^<]+)<\/div>/gi;
+    let match;
+    while ((match = flipEntryRegex.exec(html)) !== null) {
+        const id = match[1];
+        const title = match[2] ? match[2].trim() : null;
+        addEntry(id, title, match[0]);
+    }
+
+    // Older Drive views may use table rows with data-id attributes; keep that as a fallback.
+    const rowDataIdRegex = /<tr[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>([\s\S]*?)<\/tr>/gi;
+    while ((match = rowDataIdRegex.exec(html)) !== null) {
+        addEntry(match[1], tryExtractNameFromRow(match[2]), match[2]);
+    }
+
+    if (fileEntries.length > 0) {
+        if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> explicit row IDs found:', fileEntries.length);
+        return fileEntries;
+    }
+
+
+
+
+    const nameIdPatterns = [
+        { pattern: /["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["'][^"']{0,400}["']([a-zA-Z0-9_-]{25,})["']/gi, nameGroup: 1, idGroup: 2 },
+        { pattern: /["']([a-zA-Z0-9_-]{25,})["'][^"']{0,400}["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["']/gi, nameGroup: 2, idGroup: 1 }
+    ];
+    for (const entry of nameIdPatterns) {
+        let fallbackMatch;
+        while ((fallbackMatch = entry.pattern.exec(html)) !== null) {
+            const nameCandidate = fallbackMatch[entry.nameGroup];
+            const idCandidate = fallbackMatch[entry.idGroup];
+            if (!isLikelyDriveId(idCandidate)) {
+                continue;
+            }
+            addEntry(idCandidate, nameCandidate, html);
+        }
+    }
+
+    if (fileEntries.length > 0) {
+        if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> paired name/id image entries found:', fileEntries.length);
+        return fileEntries;
+    }
+
+    if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> no explicit image rows found, returning empty array');
+    return [];
+}
+
+function showMapsOptionsPrompt(contentArea, emptyState, title, messageHtml) {
+    if (!contentArea || !emptyState) return;
+
+    contentArea.innerHTML = '';
+    contentArea.style.display = 'none';
+    emptyState.innerHTML = `
+        <div style="color:#322b1d; background:#fff8e1; border:1px solid #d6c089; border-radius:8px; padding:16px;">
+            <div style="font-size:16px; font-weight:700; color:#3b2a0a;">${escapeHtml(title)}</div>
+            <div style="margin-top:8px; color:#4a412f; line-height:1.5;">${messageHtml}</div>
+        </div>
+    `;
+    emptyState.style.display = 'block';
+
+    const mapsContainer = contentArea.closest('.ct-primary-box__tab-maps');
+    if (mapsContainer) {
+        mapsContainer.dataset.mapsLastState = 'explicit-prompt';
+        mapsContainer.dataset.mapsLastCharacter = currentCharacterName || '';
+    }
+
+    setTimeout(() => {
+        const link = emptyState.querySelector('#maps-open-options');
+        if (link) {
+            link.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                try {
+                    if (chrome && chrome.runtime && chrome.runtime.openOptionsPage) {
+                        chrome.runtime.openOptionsPage();
+                    } else {
+                        window.open('options.html', '_blank');
+                    }
+                } catch (e) {
+                    console.warn('Unable to open Options page programmatically:', e);
+                    alert('Please open the extension Options (right-click the extension icon → Options) and add a mapping for your character.');
+                }
+            });
+        }
+    }, 50);
+}
+
+function escapeHtml(text) {
+    return (text || '').toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getSortedMapsForDisplay(maps) {
+    if (!maps || maps.length === 0) return [];
+    if (currentMapsSortDirection === 'asc' || currentMapsSortDirection === 'desc') {
+        const sorted = [...maps].sort((a, b) => {
+            const nameA = (a.name || '').toLowerCase();
+            const nameB = (b.name || '').toLowerCase();
+            const comparison = nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+            return currentMapsSortDirection === 'asc' ? comparison : -comparison;
+        });
+        return sorted;
+    }
+    return maps;
+}
+
+function filterAndDisplayMaps(contentArea, emptyState) {
+    const query = (currentMapsSearchQuery || '').toLowerCase().trim();
+    const filteredMaps = currentMapsList.filter((map) => {
+        const name = (map.name || '').toLowerCase();
+        return !query || name.includes(query);
+    });
+    const displayedMaps = getSortedMapsForDisplay(filteredMaps);
+
+    contentArea.innerHTML = '';
+
+    if (filteredMaps.length === 0) {
+        contentArea.style.display = 'none';
+        if (emptyState) {
+            emptyState.textContent = query ? 'No maps match your search.' : '';
+            emptyState.style.display = query ? 'block' : 'none';
+        }
+        return;
+    }
+
+    contentArea.style.display = 'grid';
+    contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
+    contentArea.style.gridAutoRows = 'minmax(180px, 1fr)';
+    contentArea.style.alignItems = 'stretch';
+    contentArea.style.alignContent = 'start';
+    contentArea.style.gap = '10px';
+    contentArea.style.minHeight = '0';
+    contentArea.style.overflowY = 'auto';
+    contentArea.style.overflowX = 'hidden';
+    contentArea.style.padding = '5px 0 18px 0';
+    if (emptyState) emptyState.style.display = 'none';
+
+    displayedMaps.forEach((map, index) => {
+        const mapCard = createMapCard(map, index);
+        contentArea.appendChild(mapCard);
+    });
+}
+
+// Create a single map card element for `map`
+function createMapCard(map, index) {
+    const mapCard = document.createElement('div');
+    mapCard.className = 'map-card';
+    mapCard.style.cssText = `
+        position: relative;
+        width: 100%;
+        min-height: 100%;
+        height: 100%;
+        border-radius: 4px;
+        overflow: hidden;
+        background: white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        border: 1px solid #ddd;
+        display: flex;
+        flex-direction: column;
+    `;
+
+    const img = document.createElement('img');
+    img.src = map.url || map.data || '';
+    img.decoding = 'async';
+    img.loading = 'eager';
+
+    if (map.fullResolutionUrl) {
+        requestIdleCallback(() => {
+            const preloadImg = new Image();
+            preloadImg.decoding = 'async';
+            preloadImg.src = map.fullResolutionUrl;
+        }, { timeout: 2000 });
+    }
+    img.style.cssText = `
+        width: 100%;
+        height: 150px;
+        object-fit: cover;
+        display: block;
+        background: #f5f7fb;
+    `;
+    img.setAttribute('data-testid', `map-image-${index}`);
+
+    const mapInfo = document.createElement('div');
+    mapInfo.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        /* Use relative vertical padding so spacing scales with font-size */
+        padding: 0.50em 8px;
+        width: 100%;
+        min-height: 0;
+        box-sizing: border-box;
+        background: white;
+        border-top: 1px solid #ddd;
+        flex-shrink: 0;
+        flex-grow: 0;
+    `;
+
+    const mapName = document.createElement('div');
+    mapName.textContent = (map.name || '').substring(0, 50) + ((map.name || '').length > 50 ? '...' : '');
+    mapName.style.cssText = `
+        font-size: 11px;
+        color: #333;
+        font-weight: 500;
+        text-align: center;
+        white-space: normal;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        line-height: 1.2;
+        margin: 0; /* ensure no external margins affect spacing */
+    `;
+    mapName.title = map.name || '';
+
+    mapInfo.appendChild(mapName);
+
+    const applyWhiteFooter = () => {
+        mapInfo.style.backgroundImage = 'none';
+        mapInfo.style.backgroundRepeat = 'no-repeat';
+        mapInfo.style.backgroundSize = 'auto';
+        mapInfo.style.backgroundColor = '#ffffff';
+        mapInfo.style.background = '#ffffff';
+        try { mapInfo.dataset.colorApplied = 'white'; } catch (e) { /* ignore */ }
+        mapName.style.color = '#111';
+        mapInfo.style.borderTop = '1px solid rgba(0,0,0,0.08)';
+    };
+
+    img.addEventListener('load', () => applyWhiteFooter());
+    if (img.complete && img.naturalWidth) setTimeout(applyWhiteFooter, 0);
+    img.addEventListener('error', () => {
+        if (map.imageUrls && map.imageUrls.length > 1) {
+            const currentIndex = map.imageUrls.indexOf(img.src);
+            const nextIndex = currentIndex + 1;
+            if (map.imageUrls[nextIndex]) {
+                img.src = map.imageUrls[nextIndex];
+                return;
+            }
+        }
+        img.style.background = '#eee';
+        img.alt = 'Unable to load map preview';
+        img.removeAttribute('src');
+    });
+
+    mapCard.appendChild(img);
+    mapCard.appendChild(mapInfo);
+
+    mapCard.addEventListener('click', () => viewMapFullscreen(map));
+    img.addEventListener('click', (e) => { e.stopPropagation(); viewMapFullscreen(map); });
+    mapCard.addEventListener('mouseenter', () => mapCard.style.transform = 'scale(1.01)');
+    mapCard.addEventListener('mouseleave', () => mapCard.style.transform = 'scale(1)');
+
+    return mapCard;
+}
+
+// Append map cards without clearing the content area (prevents flashing)
+function appendMapCards(newMaps, contentArea) {
+    if (!newMaps || newMaps.length === 0) return;
+    // Ensure grid styles are applied
+    contentArea.style.display = 'grid';
+    contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
+    contentArea.style.gridAutoRows = 'minmax(180px, auto)';
+    contentArea.style.gap = '10px';
+    contentArea.style.minHeight = '0';
+    contentArea.style.overflowY = 'auto';
+    contentArea.style.overflowX = 'hidden';
+    contentArea.style.padding = '5px 0 18px 0';
+
+    const fragment = document.createDocumentFragment();
+    let idx = contentArea.querySelectorAll('.map-card').length;
+    for (let i = 0; i < newMaps.length; i++) {
+        const map = newMaps[i];
+        const card = createMapCard(map, idx++);
+        fragment.appendChild(card);
+    }
+    contentArea.appendChild(fragment);
+}
+
+// Display maps in the content area
+function displayMaps(maps, contentArea, emptyState) {
+    if (DDB_DEBUG) console.log('displayMaps called, maps length:', maps.length);
+    if (DDB_DEBUG && maps && maps.length > 0) console.log('first map url:', maps[0].url);
+    contentArea.innerHTML = '';
+
+    if (maps.length === 0) {
+        if (DDB_DEBUG) console.log('No maps stored');
+        contentArea.style.display = 'none';
+        if (emptyState) emptyState.style.display = 'block';
+        return;
+    }
+
+    contentArea.style.display = 'grid';
+    contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
+    contentArea.style.gridAutoRows = 'minmax(180px, auto)';
+    contentArea.style.gap = '10px';
+    contentArea.style.minHeight = '0';
+    contentArea.style.overflowY = 'auto';
+    contentArea.style.overflowX = 'hidden';
+    contentArea.style.padding = '5px 0 18px 0';
+    if (emptyState) emptyState.style.display = 'none';
+
+    currentMapsList = maps;
+    filterAndDisplayMaps(contentArea, emptyState);
+}
+
+// View map fullscreen
+function viewMapFullscreen(map) {
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        cursor: zoom-out;
+    `;
+
+    const img = document.createElement('img');
+    img.style.cssText = `
+        max-width: 90vw;
+        max-height: 90vh;
+        border-radius: 4px;
+        box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        cursor: default;
+    `;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        background: white;
+        border: none;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        font-size: 24px;
+        cursor: pointer;
+        z-index: 10001;
+    `;
+
+    // Prefer the full-resolution Drive URL for the fullscreen view,
+    // then fall back to the preview URLs if needed.
+    const urls = [];
+    if (map.fullResolutionUrl || map.url || map.data) {
+        urls.push(map.fullResolutionUrl || map.url || map.data || '');
+    }
+    if (map.imageUrls && map.imageUrls.length) {
+        map.imageUrls.forEach((candidate) => {
+            if (candidate && !urls.includes(candidate)) {
+                urls.push(candidate);
+            }
+        });
+    }
+    if (!urls.length) {
+        urls.push('');
+    }
+    let idx = 0;
+    let errorPlaceholder = null;
+
+    function tryLoadNext() {
+        if (idx >= urls.length) {
+            // show error
+            if (errorPlaceholder) return;
+            errorPlaceholder = document.createElement('div');
+            errorPlaceholder.textContent = '⚠️ Unable to load image preview';
+            errorPlaceholder.style.cssText = 'color:#fff;padding:20px;background:transparent;border-radius:4px;';
+            modal.appendChild(errorPlaceholder);
+            return;
+        }
+        img.src = urls[idx];
+    }
+
+    img.addEventListener('error', () => {
+        idx += 1;
+        tryLoadNext();
+    });
+
+    img.addEventListener('load', () => {
+        // remove any error placeholder if present
+        if (errorPlaceholder && errorPlaceholder.parentElement) errorPlaceholder.remove();
+    });
+
+    modal.addEventListener('click', () => modal.remove());
+    img.addEventListener('click', (e) => e.stopPropagation());
+    closeBtn.addEventListener('click', () => modal.remove());
+
+    modal.appendChild(img);
+    modal.appendChild(closeBtn);
+    document.body.appendChild(modal);
+
+    tryLoadNext();
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeExtension);
+} else {
+    initializeExtension();
+}

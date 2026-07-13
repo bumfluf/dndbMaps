@@ -1,4 +1,4 @@
-﻿// D&D Beyond Extension - Options Page
+﻿// D&D Beyond Extension - Settings Page
 
 let currentEditCharacter = null;
 let originalEditCharacterName = null;
@@ -213,7 +213,7 @@ function autofillCharacterName(characterName) {
     showStatus('Character name autofilled from active D&D Beyond sheet', 'success');
 }
 
-// Load and bind maps options
+// Load and bind map settings
 // per-mapping subfolder settings are set via the UI when adding/editing a mapping
 
 // Extract folder ID from Google Drive URL
@@ -454,4 +454,4 @@ function showStatus(message, type) {
     }
 }
 
-// mapsOptions is no longer stored globally; options are saved per-character mapping
+// mapsSettings is no longer stored globally; settings are saved per-character mapping

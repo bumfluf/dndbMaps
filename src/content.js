@@ -64,10 +64,11 @@ async function initializeExtension() {
     
     injectTabButtonStyles();
     
-    // Get character name and settings
+    // Detect the current character before trying to build the Maps UI.
     await getCharacterName();
     await loadCharacterSettings();
 
+    // Warm up the mapped folder in the background so later loads feel faster.
     if (currentCharacterSettings && currentCharacterSettings.folderId) {
         setTimeout(() => {
             void preloadMapsCacheIfNeeded();
@@ -86,7 +87,7 @@ let currentCharacterSettings = null;
  * @returns {Promise<void>} Resolves once the character name has been found or retries have finished.
  */
 async function getCharacterName() {
-    // If the URL changed since last detection, clear cached name so we re-detect
+    // The page can change between character sheets, so clear the cached name when the URL changes.
     try {
         const href = window.location.href;
         if (lastCharacterUrl !== href) {
@@ -101,13 +102,15 @@ async function getCharacterName() {
         return;
     }
 
-    // Attempt immediately, then retry while the page renders
+    // Try once immediately and then keep retrying while the page finishes rendering.
     if (findCharacterName()) {
         return;
     }
 
     const maxAttempts = 10;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Wait briefly between retries. The character header may not be present until
+        // D&D Beyond finishes client-side rendering, so retry a few times instead of failing.
         await new Promise((resolve) => setTimeout(resolve, 500));
         if (findCharacterName()) {
             return;
@@ -131,12 +134,13 @@ function findCharacterName() {
         const low = cand.toLowerCase();
         if (invalidCharacterNames.has(low)) return false;
         if (/d\s*&?\s*d beyond/i.test(low) || /https?:\/\//i.test(cand)) return false;
+        // Normalize to an alphanumeric-only form for stricter length checks (removes punctuation/whitespace).
         const normalized = normalize(cand);
         if (normalized.length < 3) return false;
         currentCharacterName = cand;
         return true;
     };
-    // Only use the DDB character header selector to find the character name.
+    // Prefer the D&D Beyond character header selectors because they are the most reliable signals on the sheet.
     try {
         const hdr = document.querySelector('.ddbc-character-tidbits__heading h1, h1.styles_characterName__2x8wQ');
         if (hdr && hdr.textContent && tryCandidate(hdr.textContent, 'character header (preferred)')) return true;
@@ -266,7 +270,7 @@ function loadCharacterSettings() {
         chrome.storage.sync.get('characterMappings', (result) => {
             const mappings = result.characterMappings || {};
             
-            // Only use an exact stored name match
+            // Use an exact stored name match so a similar name does not accidentally load the wrong folder.
             if (mappings[currentCharacterName]) {
                 currentCharacterSettings = mappings[currentCharacterName];
                 resolve(currentCharacterSettings);
@@ -279,7 +283,7 @@ function loadCharacterSettings() {
     });
 }
 
-// Inject Maps tab after Extras
+// The Maps experience is attached to the same tab system used by the character sheet.
 let mapsTabActive = false;
 let mapsUiObserver = null;
 let mapsResizeTimer = null;
@@ -410,6 +414,8 @@ function setupMapsReactivity() {
         }
 
         if (mapsTabActive) {
+            // If Maps is currently active, DOM mutations may change layout or detach elements.
+            // Schedule a recovery to re-apply selection and restore visibility after mutations settle.
             scheduleMapsRecovery();
         }
     });
@@ -460,8 +466,8 @@ function scheduleMapsRecovery() {
  * @returns {HTMLElement|null} The Maps panel container if it exists.
  */
 function ensureMapsPanelVisible() {
-    // The MAPS tab content should live as a sibling to the existing tab panels,
-    // not inside the currently visible panel itself.
+    // Keep the Maps content as a sibling panel instead of nesting it inside another tab panel.
+    // That helps the UI stay visible and behave like the rest of the character sheet.
     const root = findTabPanelsRoot();
     if (!root) return null;
     const mapsTabContainerSelector = '.ct-primary-box__tab-maps';
@@ -608,10 +614,8 @@ function handleMapsTabClick() {
  */
 function populateMapsContent(container) {
     
-    // `container` is expected to be the parent that contains tab panels.
-    // Create (or reuse) a child tab container that matches D&D Beyond's
-    // `.ct-primary-box__tab ct-primary-box__tab--maps` structure so we don't
-    // overwrite sibling tab content.
+    // The parent container holds the tab panels, so create a dedicated child panel for Maps.
+    // This keeps the new UI separate from the existing tab content instead of overwriting it.
     const parent = container;
     const mapsTabSelector = '.ct-primary-box__tab-maps';
     let mapsTab = parent.querySelector(mapsTabSelector);
@@ -622,7 +626,7 @@ function populateMapsContent(container) {
         parent.appendChild(mapsTab);
     }
 
-    // If the maps section already exists inside the mapsTab, ensure it is visible.
+    // Reuse the existing Maps section if it was already created, otherwise build it from scratch.
     const existingContent = mapsTab.querySelector('.ct-maps-section');
     if (existingContent) {
         setImportantStyles(mapsTab, {
@@ -738,7 +742,7 @@ function setupMapsSearch(mapsTab) {
         searchInput.focus();
     });
 
-    // Helper: detect Underdark (dark) mode by checking character sheet computed color
+    // Detect the sheet theme from the character sheet colors so the sort button can match it.
     function isUnderdarkActive() {
         const characterSheet = document.querySelector('.ct-character-sheet');
         if (!characterSheet) return false;
@@ -746,8 +750,7 @@ function setupMapsSearch(mapsTab) {
         return textColor === 'rgb(162, 172, 178)';
     }
 
-    // Update the sort arrow color to match light/dark mode. Don't inject SVGs;
-    // just color the existing arrow glyph so it follows the theme.
+    // Update the sort arrow color instead of injecting a new icon, keeping the UI simple and theme-aware.
     function updateSortButtonColor() {
         if (!sortButton) return;
         const dark = isUnderdarkActive();
@@ -766,7 +769,7 @@ function setupMapsSearch(mapsTab) {
         sortButton.style.color = color;
     }
 
-    // Initialize color and observe theme changes on the character sheet
+    // Initialize the sort button color and watch the character sheet for theme changes.
     updateSortButtonColor();
     try {
         const sheetNode = document.querySelector('.ct-character-sheet');
@@ -828,8 +831,7 @@ function ensureMapsContentLoaded(mapsTab) {
     }
 }
 
-// Maps are shown directly from the configured Google Drive folder.
-// Load and display stored maps
+// Maps are shown directly from the configured Google Drive folder, so this step decides which source to use.
 /**
  * Loads map cards either from a saved Google Drive mapping or from the current character's configuration.
  * @param {HTMLElement} container The Maps tab container element.
@@ -850,7 +852,7 @@ function loadStoredMaps(container) {
     currentMapsRenderedCharacter = currentCharacterName;
     currentMapsRenderedState = contentState;
 
-    // Check if there's a Google Drive mapping for this character
+    // Use the configured Google Drive folder when a mapping exists for this character.
     if (currentCharacterSettings && currentCharacterSettings.folderId) {
         loadMapsFromGoogleDrive(container, contentArea, emptyState);
         return;
@@ -866,7 +868,7 @@ function loadStoredMaps(container) {
         return;
     }
 
-    // Otherwise, load from local storage
+    // Fall back to the browser cache when no mapping is available for the current character.
     chrome.storage.local.get('dndMaps', (result) => {
         const maps = result.dndMaps || [];
         displayMaps(maps, contentArea, emptyState);
@@ -884,12 +886,12 @@ function loadStoredMaps(container) {
 function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
     contentArea.innerHTML = '';
     contentArea.style.display = 'grid';
-    // Show a lightweight loading message until the first thumbnail appears
+    // Show a lightweight loading message until the first thumbnails start arriving.
     let loadingDiv = document.createElement('div');
     loadingDiv.id = 'maps-loading';
     loadingDiv.className = 'ct-maps-loading';
     loadingDiv.textContent = 'Retrieving maps from Google Drive…';
-    // D&D-themed parchment style, matches prompts used elsewhere in the extension
+    // Use a parchment-like style so the loading notice feels consistent with the rest of the extension.
     loadingDiv.style.cssText = [
         'width:100%',
         'box-sizing:border-box',
@@ -908,10 +910,7 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
         if (contentArea && contentArea.parentElement) contentArea.parentElement.insertBefore(loadingDiv, contentArea);
     } catch (e) { /* ignore */ }
     
-    // (no loading text — keep UI minimal; incremental results will appear as they load)
-    // (no persistent status element — incremental results append without flashing)
-    
-    // Fetch images from Google Drive with incremental progress
+    // Keep the UI minimal while thumbnails appear progressively instead of waiting for the full fetch.
     currentMapsList = [];
     const accumulated = { maps: [], seen: new Set() };
     let appendedAny = false;
@@ -941,7 +940,7 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
             }
             if (added.length > 0) {
                 appendedAny = true;
-                // remove loading message as soon as first thumbnails are available
+                // Remove the loading notice as soon as the first thumbnails are ready to show.
                 try { if (loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (er) { /* ignore */ }
                 appendMapCards(added, contentArea);
             }
@@ -951,7 +950,7 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
 
     fetchGoogleDriveMaps(currentCharacterSettings.folderId, onProgress)
         .then(maps => {
-            // Clear any loading indicator if present (none by default)
+            // Remove the loading notice when the fetch completes, whether it was ever shown or not.
             try { if (typeof loadingDiv !== 'undefined' && loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (e) { /* ignore */ }
 
             if (!maps || maps.length === 0) {
@@ -1043,7 +1042,7 @@ function buildGoogleDriveFullResolutionUrl(fileId) {
  * @returns {Promise<Array>} The discovered map entries formatted for display.
  */
 async function fetchGoogleDriveMaps(folderId, onProgress) {
-    // If subfolder crawling is enabled per-mapping, use recursive crawler
+    // If subfolder crawling is enabled for the mapping, walk the folder tree recursively.
     const seenIds = new Set();
     const maps = [];
     let fileEntries = [];
@@ -1087,7 +1086,7 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
     return maps;
 }
 
-// Cache helpers for folder HTML parse results
+// Cache parsed folder results so repeated visits can reuse the same Drive data.
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /**
  * Reads the cached folder store from browser storage.
@@ -1148,7 +1147,7 @@ function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
     });
 }
 
-// Crawl using breadth-first depth waves so top-level folders are processed first.
+// Crawl the folder tree in breadth-first order so the top-level content appears first.
 /**
  * Recursively crawls Google Drive subfolders to collect image entries up to a chosen depth.
  * @param {string} rootFolderId The starting folder identifier.
@@ -1181,6 +1180,8 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
                     }
                 }
                 scanned += 1;
+                // When cached data exists and is fresh, use it to avoid network requests.
+                // Still notify progress consumers so incremental UI updates can occur.
                 if (entries.length > 0 || subfolders.length > 0) {
                 }
                 onProgress && onProgress({ newEntries: entries, folderId, scanned });
@@ -1256,13 +1257,16 @@ function requestDriveFolderHtml(folderId) {
             { action: 'fetchDriveFolderHtml', folderId },
             (response) => {
 
+                // If the background worker reported an internal runtime error, surface it to the caller.
                 if (chrome.runtime.lastError) {
                         reject({ success: false, error: chrome.runtime.lastError.message });
                     return;
                 }
 
+                    // The background worker returns a { success, html, attempts } object. If it indicates failure,
+                    // reject with the entire response so the caller can render helpful diagnostics.
                     if (!response || !response.success) {
-                        // Reject with the full response object so callers can show diagnostic info
+                        // Return the full response object so callers can show useful diagnostics if the fetch fails.
                         reject(response || { success: false, error: 'Background fetch failed' });
                         return;
                     }
@@ -1410,7 +1414,7 @@ function filterAndDisplayMaps(contentArea, emptyState) {
     });
 }
 
-// Create a single map card element for `map`
+// Build one thumbnail card at a time so each image can be styled and clicked independently.
 /**
  * Creates a thumbnail card for a single map so it can be displayed inside the Maps tab.
  * @param {Object} map The map metadata for the card.
@@ -1509,6 +1513,8 @@ function createMapCard(map, index) {
     img.addEventListener('load', () => applyWhiteFooter());
     if (img.complete && img.naturalWidth) setTimeout(applyWhiteFooter, 0);
     img.addEventListener('error', () => {
+        // If loading the first candidate image fails, try the next candidate URL from the list.
+        // This lets the UI recover from permission redirects or thumbnail generation failures.
         if (map.imageUrls && map.imageUrls.length > 1) {
             const currentIndex = map.imageUrls.indexOf(img.src);
             const nextIndex = currentIndex + 1;
@@ -1517,6 +1523,7 @@ function createMapCard(map, index) {
                 return;
             }
         }
+        // If no further candidates remain, show a neutral placeholder and remove the broken src.
         img.style.background = '#eee';
         img.alt = 'Unable to load map preview';
         img.removeAttribute('src');
@@ -1533,7 +1540,7 @@ function createMapCard(map, index) {
     return mapCard;
 }
 
-// Append map cards without clearing the content area (prevents flashing)
+// Append new cards incrementally so the grid does not flash or reset while content is loading.
 /**
  * Appends new map cards without clearing the whole grid so the UI feels smoother while loading.
  * @param {Array} newMaps The map objects to add.
@@ -1554,7 +1561,7 @@ function appendMapCards(newMaps, contentArea) {
     contentArea.appendChild(fragment);
 }
 
-// Display maps in the content area
+// Replace the current grid contents with the latest filtered map list.
 /**
  * Displays a list of maps in the content area and applies the current search and sort filters.
  * @param {Array} maps The map objects to display.
@@ -1596,7 +1603,7 @@ function styleMapsGrid(contentArea) {
     contentArea.style.padding = '5px 0 18px 0';
 }
 
-// View map fullscreen
+// Open a full-screen preview when the user clicks a map card.
 /**
  * Opens a full-screen modal so a selected map can be viewed at a larger size.
  * @param {Object} map The map object whose image should be displayed.
@@ -1643,8 +1650,10 @@ function viewMapFullscreen(map) {
         z-index: 10001;
     `;
 
-    // Prefer the full-resolution Drive URL for the fullscreen view,
-    // then fall back to the preview URLs if needed.
+    // Build a prioritized list of URLs to try for the full-screen preview.
+    // Priority: use the `fullResolutionUrl` first (best quality), then the primary preview URL,
+    // and finally any additional candidates. This ordering helps present the best image while
+    // still recovering from access/thumbnail failures by trying fallbacks.
     const urls = [];
     if (map.fullResolutionUrl || map.url || map.data) {
         urls.push(map.fullResolutionUrl || map.url || map.data || '');

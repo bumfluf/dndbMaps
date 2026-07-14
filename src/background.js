@@ -38,7 +38,8 @@ async function fetchDriveFolderHtml(folderId) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
-            // First try with credentials (works when user is signed-in in the browser)
+            // First try with credentials (works when the user is signed-in in the browser).
+            // If this fails (e.g. CORS or auth), fall back to a no-credentials fetch for shared/public folders.
             try {
                 const response = await fetch(folderUrl, {
                     credentials: 'include',

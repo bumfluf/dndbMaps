@@ -13,10 +13,17 @@
 </head>
 <body>
     <div class="container">
+        <!--
+            Compact popup container: the extension popup is a constrained UI shown from the browser toolbar.
+            Keeping the layout simple with a single full-width primary action reduces clicks and
+            avoids complex navigation inside the small popup viewport.
+        -->
         <h1>D&D Beyond Extension</h1>
         <p id="status"></p>
+        <!-- Primary action opens the full settings page; kept as a single button for clarity. -->
         <button id="actionBtn">Open Settings</button>
         <div id="content">
+            <!-- Short explanatory text placed in a separate block so status messages can be shown above. -->
             <p>Open the extension Settings to link your character sheet name to a Google Drive folder so maps load automatically.</p>
         </div>
     </div>

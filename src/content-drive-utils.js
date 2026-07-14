@@ -55,11 +55,14 @@
     function extractSubfolderIdsFromHtml(html, parentFolderId) {
         const ids = new Set();
         if (!html) return [];
+        // Regex: capture Drive folder URLs of the form '/drive/folders/<id>' or 'drive.google.com/drive/folders/<id>'.
+        // The id is expected to be 25+ chars (common Drive folder id length); using a permissive charset.
         const regex = /(?:drive\.google\.com[\/]drive|\/drive)?\/folders\/([a-zA-Z0-9_-]{25,})/gi;
         let match;
         while ((match = regex.exec(html)) !== null) {
             const id = match[1];
             if (!id) continue;
+            // Ignore any folder IDs that point back to the parent or are unexpectedly short.
             if (id === parentFolderId) continue;
             if (id.length < 25) continue;
             ids.add(id);
@@ -79,6 +82,11 @@
         const normalizedFolderId = folderId ? folderId.toString().trim() : null;
 
         const isLikelyDriveId = (candidate) => {
+            // Quick heuristics to filter out values that are not Drive file IDs:
+            // - empty or same as folder id
+            // - API keys (start with 'AIza')
+            // - UUIDs (common false positives from other markup)
+            // - unrealistic length
             if (!candidate || candidate === normalizedFolderId) return false;
             if (candidate.startsWith('AIza')) return false;
             if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) return false;
@@ -101,6 +109,7 @@
             if (!value) return false;
             const cleaned = decodeHtmlEntities(value.toString().replace(/<[^>]+>/g, '').trim()).trim();
             const match = cleaned.match(/\.([a-z0-9]+)(?:[\?#].*)?$/i);
+            // Match file extension at end of string (allowing query/hash) and verify it's a known image type.
             return !!(match && imageExtensions.includes(match[1].toLowerCase()));
         };
 
@@ -109,6 +118,7 @@
             if (!cleaned) return null;
             const stripped = cleaned.replace(/\.[^.]+$/, '').trim();
             const lower = stripped.toLowerCase();
+            // Ignore generic UI labels that can appear in Drive markup instead of real filenames.
             if (!stripped || lower === 'share' || lower === 'shared' || lower === 'share link' || lower === 'download' || lower === 'open' || lower === 'preview' || lower === 'image') {
                 return null;
             }
@@ -133,6 +143,12 @@
                 return;
             }
 
+            /*
+                Decide on a name to use for this file entry:
+                - Prefer an extracted candidateName (from title/tooltip/aria-label)
+                - Otherwise try to pull a filename-like token out of the row HTML
+                After a name is chosen, validate it looks like an image and sanitize it.
+            */
             let nameToUse = candidateName;
             if (!nameToUse && rowHtml) {
                 nameToUse = extractImageNameFromHtml(rowHtml);
@@ -155,6 +171,11 @@
         };
 
         const tryExtractNameFromRow = (rowHtml) => {
+            /*
+                Look for common attributes D rive uses to label files (data-tooltip, title, aria-label)
+                or a visible filename inside the cell. Patterns are intentionally permissive because
+                Drive's rendered markup can vary between list/grid/embed views.
+            */
             const namePatterns = [
                 /data-tooltip=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
                 /title=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
@@ -175,6 +196,7 @@
             return null;
         };
 
+        // Matches custom "flip-entry" card markup Drive can emit in some views: capture id and title.
         const flipEntryRegex = /<div\s+class=["']flip-entry["'][^>]*id=["']entry-([a-zA-Z0-9_-]{25,})["'][^>]*>[\s\S]*?<div\s+class=["']flip-entry-title["']\s*>([^<]+)<\/div>/gi;
         let match;
         while ((match = flipEntryRegex.exec(html)) !== null) {
@@ -183,6 +205,7 @@
             addEntry(id, title, match[0]);
         }
 
+        // Matches table row entries that include a data-id attribute (common in list views).
         const rowDataIdRegex = /<tr[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>([\s\S]*?)<\/tr>/gi;
         while ((match = rowDataIdRegex.exec(html)) !== null) {
             addEntry(match[1], tryExtractNameFromRow(match[2]), match[2]);
@@ -192,6 +215,7 @@
             return fileEntries;
         }
 
+        // Fallback patterns: names and ids can appear near each other in attributes; capture either order.
         const nameIdPatterns = [
             { pattern: /["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["'][^"']{0,400}["']([a-zA-Z0-9_-]{25,})["']/gi, nameGroup: 1, idGroup: 2 },
             { pattern: /["']([a-zA-Z0-9_-]{25,})["'][^"']{0,400}["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["']/gi, nameGroup: 2, idGroup: 1 }

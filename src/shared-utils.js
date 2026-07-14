@@ -23,6 +23,8 @@
      * @returns {string} A lowercase, whitespace-normalized version of the name.
      */
     function normalizeCharacterName(value) {
+        // Lowercase and collapse whitespace so stored names and detected names compare reliably
+        // regardless of capitalization or extra spacing.
         return normalizeText(value).toLowerCase();
     }
 

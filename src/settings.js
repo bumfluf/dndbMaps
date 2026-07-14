@@ -130,6 +130,7 @@ function executeScriptCharacterName(tabId) {
             {
                 target: { tabId },
                 func: () => {
+                    // Lightweight normalization used inside the page context to collapse whitespace.
                     const normalize = (value) => {
                         if (!value) return null;
                         return value.toString().replace(/\s+/g, ' ').trim();
@@ -142,6 +143,7 @@ function executeScriptCharacterName(tabId) {
                         'h1'
                     ];
 
+                    // Try a list of common character name selectors first; these are the most reliable.
                     for (const selector of selectors) {
                         const element = document.querySelector(selector);
                         if (element && element.textContent) {
@@ -152,6 +154,8 @@ function executeScriptCharacterName(tabId) {
                         }
                     }
 
+                    // As a fallback, inspect the window title and strip D&D Beyond suffixes so we don't
+                    // accidentally return the site name. This helps when the sheet markup isn't available.
                     if (document.title && /d&amp;d beyond/i.test(document.title) === false) {
                         const title = normalize(document.title);
                         if (title) {
@@ -238,20 +242,23 @@ function populateCharacterNameFromCurrentSheet() {
                 return;
             }
 
-            chrome.tabs.sendMessage(tab.id, { action: 'getCharacterName' }, async (response) => {
-                if (!chrome.runtime.lastError && response && response.characterName) {
-                    autofillCharacterName(response.characterName);
-                    return;
-                }
+                // First try to ask the content script for the detected character name. If that fails (no content
+                // script present or no name detected), fall back to executing a small script in the tab to inspect
+                // the DOM and the document title as a last resort.
+                chrome.tabs.sendMessage(tab.id, { action: 'getCharacterName' }, async (response) => {
+                    if (!chrome.runtime.lastError && response && response.characterName) {
+                        autofillCharacterName(response.characterName);
+                        return;
+                    }
 
-                const scriptName = await executeScriptCharacterName(tab.id);
-                if (scriptName) {
-                    autofillCharacterName(scriptName);
-                    return;
-                }
+                    const scriptName = await executeScriptCharacterName(tab.id);
+                    if (scriptName) {
+                        autofillCharacterName(scriptName);
+                        return;
+                    }
 
-                tryTab(index + 1);
-            });
+                    tryTab(index + 1);
+                });
         };
 
         tryTab(0);
@@ -278,18 +285,19 @@ function autofillCharacterName(characterName) {
  * @returns {string|null} The extracted folder ID, if one could be identified.
  */
 function extractFolderId(input) {
-    // Check if it's just an ID
+    // Check if the user pasted a raw folder ID (alphanumeric with -/_). Use a minimum length
+    // threshold to avoid accidental short matches from other text.
     if (/^[a-zA-Z0-9-_]+$/.test(input) && input.length > 20) {
         return input;
     }
     
-    // Extract from URL
+    // Extract a folder id from common Drive URL patterns like '/folders/<id>'.
     const match = input.match(/folders\/([a-zA-Z0-9-_]+)/);
     if (match) {
         return match[1];
     }
     
-    // Extract from open?id=
+    // Also accept the 'open?id=' or '?id=' query parameter form used by some Drive links.
     const match2 = input.match(/[?&]id=([a-zA-Z0-9-_]+)/);
     if (match2) {
         return match2[1];
@@ -383,7 +391,8 @@ function addCharacterMapping() {
             if (!overwrite) return;
         }
         
-        // Read per-mapping subfolder settings from UI
+        // Read per-mapping subfolder settings from the form. These allow each mapping
+        // to control whether subfolders are searched and how deep the crawl should go.
         const checkbox = document.getElementById('searchSubfolders');
         const depthInput = document.getElementById('subfolderDepth');
         const searchSubfolders = !!(checkbox && checkbox.checked);
@@ -398,7 +407,8 @@ function addCharacterMapping() {
             subfolderDepth
         };
         
-        // Save to storage
+        // Save the mapping to sync storage so content scripts can read it on other devices
+        // where the user is signed in to the browser profile.
         chrome.storage.sync.set({ characterMappings: mappings }, () => {
             const actionText = mappingExists ? 'updated' : 'added';
             showStatus(`✓ Character "${characterName}" ${actionText} successfully!`, 'success');

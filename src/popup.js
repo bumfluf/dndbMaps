@@ -22,6 +22,7 @@ function initializePopup() {
             if (chrome.runtime.openOptionsPage) {
                 await chrome.runtime.openOptionsPage();
             } else {
+                // Fallback for older browsers: open the settings HTML directly in a new tab.
                 window.open(chrome.runtime.getURL('settings.html'), '_blank');
             }
             statusEl.textContent = 'Settings opened';

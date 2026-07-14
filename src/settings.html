@@ -26,6 +26,11 @@
 
                 <!-- Add New Character Form -->
                 <div class="form-section">
+                    <!--
+                        Form Section: kept visually self-contained so users can add a mapping without
+                        scrolling away from the existing list of mappings. Inputs are intentionally
+                        simple (text + link) to avoid complex validation inside the popup page.
+                    -->
                     <h3>Add Character Mapping</h3>
                     
                     <div class="form-group">
@@ -46,6 +51,9 @@
                     </div>
 
                     <div class="form-group form-group-checkbox">
+                        <!-- Offering a per-mapping "search subfolders" toggle lets users choose whether to
+                             crawl nested folders (useful for organized campaigns). The UI exposes a numeric
+                             depth control to limit the crawl breadth for large Drive trees. -->
                         <label for="searchSubfolders">Search subfolders when loading maps <input type="checkbox" id="searchSubfolders"></label>
                         <small class="subfolder-help">When enabled, the extension will search inside subfolders of the mapped folder. Depth (levels): <input type="number" id="subfolderDepth" min="1" max="6" value="3" style="width:80px; display:inline-block; margin-left:6px;"></small>
                     </div>
@@ -57,6 +65,8 @@
                 <div class="mappings-section">
                     <h3>Your Character Mappings</h3>
                     <div id="mappingsList" class="mappings-list">
+                        <!-- Empty state shown when no mappings exist. The DOM is kept simple so scripts
+                             can replace this section with cards dynamically. -->
                         <p class="empty-state">No character mappings yet. Add one above!</p>
                     </div>
                 </div>

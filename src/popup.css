@@ -3,7 +3,11 @@
  * Purpose: Styles the browser popup UI.
  * Contribution: These rules create the compact, themed appearance of the popup so the extension feels like part of the D&D Beyond experience.
  */
-
+ 
+/*
+    Note: `box-sizing: border-box` simplifies sizing math for the compact popup
+    where fixed widths and paddings are used. This avoids overflow inside the toolbar popup.
+*/
 * {
     margin: 0;
     padding: 0;
@@ -25,6 +29,10 @@ body {
     box-shadow: 0 20px 45px rgba(0, 0, 0, 0.55);
 }
 
+/*
+  The container uses a large border-radius and heavy shadow to visually separate the popup
+  from the browser UI. The fixed `width` on `body` keeps the popup predictable across browsers.
+*/
 h1 {
     font-size: 20px;
     margin-bottom: 10px;
@@ -48,6 +56,7 @@ button {
     font-size: 14px;
     font-weight: 700;
     cursor: pointer;
+    /* Smooth micro-interactions: translate is cheaper than large layout changes and feels snappy. */
     transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
@@ -61,6 +70,9 @@ button:active {
     box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
+/* `min-height` ensures the content block remains visually balanced even when empty or when the
+    status area has short messages; prevents the popup from collapsing to a tiny height. 
+*/
 #content {
     margin-top: 18px;
     padding: 16px;
@@ -72,3 +84,4 @@ button:active {
     line-height: 1.55;
     min-height: 56px;
 }
+

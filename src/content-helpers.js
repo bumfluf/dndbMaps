@@ -22,6 +22,9 @@
      * @returns {void}
      */
     function setImportantStyles(element, styles) {
+        // Prefer any existing shared implementation (injected by the content script runtime)
+        // so platform-specific overrides are centralized. Fall back to direct style property
+        // manipulation only when no shared helper exists.
         if (shared.setImportantStyles) {
             shared.setImportantStyles(element, styles);
             return;
@@ -42,6 +45,8 @@
      * @returns {string} The escaped text.
      */
     function escapeHtml(text) {
+        // Delegate to a shared implementation when available to ensure consistent escaping
+        // across popup, settings, and content script contexts.
         if (shared.escapeHtml) {
             return shared.escapeHtml(text);
         }

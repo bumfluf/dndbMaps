@@ -657,7 +657,7 @@ function populateMapsContent(container) {
             <section class="ct-extras ct-maps-section" style="padding: 0 0px 20px; display: flex; flex-direction: column; min-height: 100%; height: 100%; width: 100%; box-sizing: border-box;">
                 <h2 class="accessibility_screenreaderOnly__OEzRB">Maps</h2>
 
-                <div class="ct-equipment__filter" style="margin-bottom: 16px; width: 100%; display: flex; align-items: center; gap: 8px;">
+                <div class="ct-equipment__filter" style="margin-bottom: 0px; width: 100%; display: flex; align-items: center; gap: 8px;">
                     <div class="ct-inventory-filter" style="width: 100%; flex: 1 1 auto;">
                         <div class="ct-inventory-filter__interactions" style="width: 100%;">
                             <div class="ct-inventory-filter__box" style="width: 100%;">
@@ -758,7 +758,7 @@ function setupMapsSearch(mapsTab) {
         if (!arrowSpan) {
             arrowSpan = document.createElement('span');
             arrowSpan.className = 'ct-maps-sort-arrow';
-            arrowSpan.style.cssText = 'margin-left:6px;font-size:20px;line-height:1;display:inline-block;';
+            arrowSpan.style.cssText = 'margin-left:-6px;font-size:20px;line-height:1;display:inline-block;';
             arrowSpan.textContent = '⇅';
             // reset button content and append arrow span
             sortButton.innerHTML = '';

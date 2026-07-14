@@ -1,4 +1,10 @@
-﻿(function (root, factory) {
+﻿/*
+ * File: content-drive-utils.js
+ * Purpose: Contains reusable helpers for working with Google Drive image and folder data.
+ * Contribution: These utilities help the content script turn Drive HTML and folder IDs into a consistent set of image URLs and file entries for the Maps UI.
+ */
+
+(function (root, factory) {
     const api = factory();
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -11,6 +17,11 @@
     root.extractSubfolderIdsFromHtml = api.extractSubfolderIdsFromHtml;
     root.extractGoogleDriveFileEntries = api.extractGoogleDriveFileEntries;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+    /**
+     * Builds a prioritized list of Google Drive image URLs for a file ID.
+     * @param {string} fileId The Google Drive file identifier.
+     * @returns {string[]} A list of image URL candidates.
+     */
     function buildGoogleDriveImageUrls(fileId) {
         return [
             `https://drive.google.com/thumbnail?authuser=0&sz=w800&id=${fileId}`,
@@ -22,6 +33,11 @@
         ];
     }
 
+    /**
+     * Chooses a high-quality Google Drive URL for a file when the full-resolution preview is needed.
+     * @param {string} fileId The Google Drive file identifier.
+     * @returns {string} The preferred full-resolution image URL.
+     */
     function buildGoogleDriveFullResolutionUrl(fileId) {
         return [
             `https://lh3.googleusercontent.com/d/${fileId}`,
@@ -30,6 +46,12 @@
         ][0];
     }
 
+    /**
+     * Extracts child folder IDs from Google Drive HTML so the crawler can traverse subfolders.
+     * @param {string} html The HTML returned by the Drive folder page.
+     * @param {string} parentFolderId The current folder identifier to avoid self-links.
+     * @returns {string[]} A list of subfolder IDs discovered in the HTML.
+     */
     function extractSubfolderIdsFromHtml(html, parentFolderId) {
         const ids = new Set();
         if (!html) return [];
@@ -45,6 +67,12 @@
         return Array.from(ids);
     }
 
+    /**
+     * Extracts image file entries from Google Drive HTML so they can be displayed in the Maps UI.
+     * @param {string} html The Drive folder HTML to parse.
+     * @param {string} folderId The folder currently being scanned.
+     * @returns {Array<{id:string, name:string, originalName:string}>} A list of discovered image entries.
+     */
     function extractGoogleDriveFileEntries(html, folderId) {
         const fileEntries = [];
         const seenIds = new Set();

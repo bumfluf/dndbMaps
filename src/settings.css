@@ -1,4 +1,10 @@
-﻿* {
+﻿/*
+ * File: settings.css
+ * Purpose: Styles the settings page for the extension.
+ * Contribution: These rules make the settings experience readable and polished, with clear form sections, status messages, and mapping cards.
+ */
+
+* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;

@@ -1,8 +1,18 @@
-﻿// D&D Beyond Extension - Settings Page
+﻿/*
+ * File: settings.js
+ * Purpose: Powers the extension's settings page.
+ * Contribution: This file lets users link character names to Google Drive folders, test access, and manage the saved mappings that the content script uses to show Maps.
+ */
+
+// D&D Beyond Extension - Settings Page
 
 let currentEditCharacter = null;
 let originalEditCharacterName = null;
 
+/**
+ * Initializes the settings page by loading saved mappings and preparing the form UI.
+ * @returns {void}
+ */
 function initializeSettingsPage() {
     resetFormMode();
     loadMappings();
@@ -25,6 +35,10 @@ if (shared.whenDomReady) {
     initializeSettingsPage();
 }
 
+/**
+ * Connects the settings page buttons and inputs to their event handlers.
+ * @returns {void}
+ */
 function setupEventListeners() {
     const addCharacterBtn = document.getElementById('addCharacterBtn');
     const testConnectionBtn = document.getElementById('testConnectionBtn');
@@ -41,6 +55,11 @@ function setupEventListeners() {
     }
 }
 
+/**
+ * Normalizes a character name so saved mappings can be matched consistently.
+ * @param {string} name The raw character name provided by the user.
+ * @returns {string} A normalized character name for comparison.
+ */
 function normalizeCharacterName(name) {
     const shared = window.__dndBeyondShared || {};
     if (shared.normalizeCharacterName) {
@@ -50,6 +69,11 @@ function normalizeCharacterName(name) {
     return (name || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/**
+ * Updates the edit state when the character name input changes.
+ * @param {Event} event The input change event.
+ * @returns {void}
+ */
 function handleCharacterNameInputChange(event) {
     const raw = event.target.value || '';
     const currentValue = normalizeCharacterName(raw);
@@ -90,6 +114,11 @@ function handleCharacterNameInputChange(event) {
     });
 }
 
+/**
+ * Attempts to detect the current character name from an open D&D Beyond tab.
+ * @param {number} tabId The browser tab identifier to inspect.
+ * @returns {Promise<string|null>} The detected character name, if available.
+ */
 function executeScriptCharacterName(tabId) {
     return new Promise((resolve, reject) => {
         if (!chrome.scripting || !chrome.scripting.executeScript) {
@@ -154,6 +183,11 @@ function executeScriptCharacterName(tabId) {
     });
 }
 
+/**
+ * Updates the form heading and button labels based on whether the user is editing an existing mapping.
+ * @param {boolean} editing Whether the form is in edit mode.
+ * @returns {void}
+ */
 function setFormMode(editing) {
     const formHeading = document.querySelector('.form-section h3');
     const addCharacterBtn = document.getElementById('addCharacterBtn');
@@ -167,12 +201,20 @@ function setFormMode(editing) {
     }
 }
 
+/**
+ * Resets the form back to its default add-character state.
+ * @returns {void}
+ */
 function resetFormMode() {
     currentEditCharacter = null;
     originalEditCharacterName = null;
     setFormMode(false);
 }
 
+/**
+ * Tries to detect the active character name from an open D&D Beyond sheet and prefill the form.
+ * @returns {void}
+ */
 function populateCharacterNameFromCurrentSheet() {
     if (!chrome.tabs || !chrome.tabs.query) {
         return;
@@ -216,6 +258,11 @@ function populateCharacterNameFromCurrentSheet() {
     });
 }
 
+/**
+ * Populates the character name field with a detected name if it is still empty.
+ * @param {string} characterName The detected character name.
+ * @returns {void}
+ */
 function autofillCharacterName(characterName) {
     const characterNameInput = document.getElementById('characterName');
     if (!characterNameInput || characterNameInput.value.trim()) {
@@ -225,7 +272,11 @@ function autofillCharacterName(characterName) {
     showStatus('Character name autofilled from active D&D Beyond sheet', 'success');
 }
 
-// Extract folder ID from Google Drive URL
+/**
+ * Extracts a Google Drive folder identifier from a pasted URL or raw folder ID.
+ * @param {string} input The user-provided Drive link or folder ID.
+ * @returns {string|null} The extracted folder ID, if one could be identified.
+ */
 function extractFolderId(input) {
     // Check if it's just an ID
     if (/^[a-zA-Z0-9-_]+$/.test(input) && input.length > 20) {
@@ -247,7 +298,10 @@ function extractFolderId(input) {
     return null;
 }
 
-// Test Google Drive connection
+/**
+ * Runs the connection test workflow for the current folder input.
+ * @returns {void}
+ */
 function testGoogleDriveConnection() {
     const folderInput = document.getElementById('googleDriveFolder').value.trim();
 
@@ -279,7 +333,11 @@ function testGoogleDriveConnection() {
         });
 }
 
-// Test if folder is accessible
+/**
+ * Checks whether a folder ID appears valid enough to be considered accessible.
+ * @param {string} folderId The folder identifier to validate.
+ * @returns {Promise<boolean>} Resolves to true when the folder ID looks usable.
+ */
 function testFolderAccess(folderId) {
     return new Promise((resolve, reject) => {
         if (folderId && folderId.length > 20) {
@@ -290,7 +348,10 @@ function testFolderAccess(folderId) {
     });
 }
 
-// Add character mapping
+/**
+ * Saves a new or updated character-to-folder mapping in browser storage.
+ * @returns {void}
+ */
 function addCharacterMapping() {
     const characterName = document.getElementById('characterName').value.trim();
     const folderInput = document.getElementById('googleDriveFolder').value.trim();
@@ -351,7 +412,10 @@ function addCharacterMapping() {
     });
 }
 
-// Load and display mappings
+/**
+ * Reads the saved mappings and renders them in the settings UI.
+ * @returns {void}
+ */
 function loadMappings() {
     chrome.storage.sync.get('characterMappings', (result) => {
         const mappings = result.characterMappings || {};
@@ -414,7 +478,12 @@ function loadMappings() {
     });
 }
 
-// Edit mapping
+/**
+ * Fills the form with the details of an existing mapping so it can be edited.
+ * @param {string} characterName The saved character name.
+ * @param {Object} data The mapping data to load into the form.
+ * @returns {void}
+ */
 function editMapping(characterName, data) {
     document.getElementById('characterName').value = characterName;
     document.getElementById('googleDriveFolder').value = data.folderUrl;
@@ -429,7 +498,11 @@ function editMapping(characterName, data) {
     document.getElementById('characterName').focus();
 }
 
-// Delete mapping
+/**
+ * Removes a saved mapping after user confirmation.
+ * @param {string} characterName The character mapping to delete.
+ * @returns {void}
+ */
 function deleteMapping(characterName) {
     const confirm_delete = confirm(`Delete mapping for "${characterName}"?`);
     if (!confirm_delete) return;
@@ -445,7 +518,12 @@ function deleteMapping(characterName) {
     });
 }
 
-// Show status message
+/**
+ * Displays a temporary status message to the user.
+ * @param {string} message The message to show.
+ * @param {string} type The status type such as success, error, or loading.
+ * @returns {void}
+ */
 function showStatus(message, type) {
     const statusMsg = document.getElementById('statusMessage');
     if (!statusMsg) return;

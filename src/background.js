@@ -1,4 +1,10 @@
-﻿// Background service worker for D&D Beyond Extension
+﻿/*
+ * File: background.js
+ * Purpose: Implements the background service worker for the extension.
+ * Contribution: This file helps the Maps feature communicate with Google Drive safely from the extension's background context, so page scripts can request folder HTML without directly touching Drive from the D&D Beyond page.
+ */
+
+// Background service worker for D&D Beyond Extension
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -17,6 +23,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
+/**
+ * Requests Google Drive folder HTML from the background worker so the content script can parse it safely.
+ * @param {string} folderId The Google Drive folder identifier to fetch.
+ * @returns {Promise<string>} The HTML content returned by the Drive fetch attempt.
+ */
 async function fetchDriveFolderHtml(folderId) {
     const folderUrls = [
         `https://drive.google.com/embeddedfolderview?id=${folderId}#list`,

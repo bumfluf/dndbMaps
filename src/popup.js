@@ -1,4 +1,14 @@
-﻿function initializePopup() {
+﻿/*
+ * File: popup.js
+ * Purpose: Controls the browser popup UI for the extension.
+ * Contribution: This script wires the popup button to open the settings page and gives the user a simple entry point into the extension experience.
+ */
+
+/**
+ * Initializes the popup UI by wiring the button to open the extension settings page.
+ * @returns {void}
+ */
+function initializePopup() {
     const actionBtn = document.getElementById('actionBtn');
     const statusEl = document.getElementById('status');
     const contentEl = document.getElementById('content');

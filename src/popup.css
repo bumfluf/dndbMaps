@@ -1,4 +1,10 @@
-﻿* {
+﻿/*
+ * File: popup.css
+ * Purpose: Styles the browser popup UI.
+ * Contribution: These rules create the compact, themed appearance of the popup so the extension feels like part of the D&D Beyond experience.
+ */
+
+* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;

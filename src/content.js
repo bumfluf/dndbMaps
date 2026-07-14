@@ -1,10 +1,17 @@
-﻿// Content script for D&D Beyond Extension
-// This script runs on D&D Beyond pages
+﻿/*
+ * File: content.js
+ * Purpose: Runs inside D&D Beyond pages and builds the in-page Maps experience.
+ * Contribution: This file detects the active character, injects a Maps tab into the character sheet UI, loads Google Drive map data, and renders searchable thumbnail cards directly inside D&D Beyond.
+ */
 
-// Detect Underdark (dark) mode by checking character sheet computed color
-// (thumbnail footer theming removed — revert to original light-only footers)
 
-// Listen for messages from the settings page
+/**
+ * Responds to requests from the settings page for the currently detected character name.
+ * @param {Object} message The runtime message sent from another extension context.
+ * @param {Object} sender The sender information for the message.
+ * @param {Function} sendResponse The callback used to reply to the message.
+ * @returns {void}
+ */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'getCharacterName') {
         if (currentCharacterName || findCharacterName()) {
@@ -15,6 +22,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
+/**
+ * Adds a small style block to keep the injected Maps tab buttons readable inside D&D Beyond.
+ * @returns {void}
+ */
 function injectTabButtonStyles() {
     if (document.querySelector('#ddb-maps-tab-style')) {
         return;
@@ -45,6 +56,10 @@ function injectTabButtonStyles() {
 }
 
 // Initialize extension and inject Maps tab
+/**
+ * Initializes the Maps experience for the current character sheet.
+ * @returns {Promise<void>} Resolves after the tab, settings, and warmup logic have been prepared.
+ */
 async function initializeExtension() {
     
     injectTabButtonStyles();
@@ -66,6 +81,10 @@ async function initializeExtension() {
 let currentCharacterName = null;
 let lastCharacterUrl = null;
 let currentCharacterSettings = null;
+/**
+ * Detects the current character name from the page, retrying briefly if the DOM is still loading.
+ * @returns {Promise<void>} Resolves once the character name has been found or retries have finished.
+ */
 async function getCharacterName() {
     // If the URL changed since last detection, clear cached name so we re-detect
     try {
@@ -96,6 +115,10 @@ async function getCharacterName() {
     }
 }
 
+/**
+ * Looks for a valid character name in the current D&D Beyond page markup.
+ * @returns {boolean} True when a likely character name was found.
+ */
 function findCharacterName() {
     const invalidCharacterNames = new Set(['', 'profile', 'settings', 'home', 'extras']);
 
@@ -132,6 +155,12 @@ let mapsCachePreloadPromise = null;
 let mapsCachePreloadFolderId = null;
 const MAPS_CACHE_WARMUP_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Applies CSS rules to an element while forcing them to override site styles.
+ * @param {HTMLElement|null} element The element to style.
+ * @param {Object<string, string>} styles A map of CSS property names to values.
+ * @returns {void}
+ */
 function setImportantStyles(element, styles) {
     const helpers = window.__dndBeyondContentHelpers || {};
     if (helpers.setImportantStyles) {
@@ -145,6 +174,11 @@ function setImportantStyles(element, styles) {
     });
 }
 
+/**
+ * Checks whether a folder warmup cache entry is still fresh.
+ * @param {string} folderId The Google Drive folder identifier to inspect.
+ * @returns {Promise<Object|null>} The cached warmup entry when it is still valid, otherwise null.
+ */
 function getMapsWarmupState(folderId) {
     return new Promise((resolve) => {
         chrome.storage.local.get('dndMapsWarmup', (result) => {
@@ -160,6 +194,13 @@ function getMapsWarmupState(folderId) {
     });
 }
 
+/**
+ * Persists the warmup state for a folder so future loads can reuse the cache quickly.
+ * @param {string} folderId The Google Drive folder identifier to update.
+ * @param {boolean} completed Whether the preload completed successfully.
+ * @param {number} entryCount The number of map entries discovered during preload.
+ * @returns {Promise<void>} Resolves after the warmup state is stored.
+ */
 function setMapsWarmupState(folderId, completed, entryCount) {
     return new Promise((resolve) => {
         chrome.storage.local.get('dndMapsWarmup', (result) => {
@@ -170,6 +211,10 @@ function setMapsWarmupState(folderId, completed, entryCount) {
     });
 }
 
+/**
+ * Preloads the folder data for the mapped character so later map views can load faster.
+ * @returns {Promise<Array|Object|null>} The preload promise when started, otherwise null or an empty result.
+ */
 async function preloadMapsCacheIfNeeded() {
     if (!currentCharacterSettings || !currentCharacterSettings.folderId) {
         return null;
@@ -206,6 +251,10 @@ async function preloadMapsCacheIfNeeded() {
     return mapsCachePreloadPromise;
 }
 
+/**
+ * Loads the saved character mapping for the detected character name.
+ * @returns {Promise<Object|null>} The saved mapping data for the current character, if found.
+ */
 function loadCharacterSettings() {
     return new Promise((resolve) => {
         if (!currentCharacterName) {
@@ -235,6 +284,10 @@ let mapsTabActive = false;
 let mapsUiObserver = null;
 let mapsResizeTimer = null;
 
+/**
+ * Adds a Maps tab button to the character sheet tab menu when it is available.
+ * @returns {void}
+ */
 function injectMapsTab() {
     const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
     
@@ -268,6 +321,10 @@ function injectMapsTab() {
 }
 
 // Setup Maps tab handler
+/**
+ * Attaches click behavior to the Maps tab button once the tab exists in the DOM.
+ * @returns {void}
+ */
 function setupMapsTabHandler() {
     const mapsTabButton = document.querySelector('[data-testid="MAPS"]');
     
@@ -297,6 +354,10 @@ function setupMapsTabHandler() {
     }
 }
 
+/**
+ * Ensures other tab buttons hide the Maps panel when the user switches away from Maps.
+ * @returns {void}
+ */
 function setupGlobalTabHandlers() {
     if (window.__ddbMapsGlobalTabsHandlerBound) {
         return;
@@ -334,6 +395,10 @@ function setupGlobalTabHandlers() {
     window.__ddbMapsGlobalTabsHandlerBound = true;
 }
 
+/**
+ * Watches the page for DOM changes so the injected Maps tab stays connected to D&D Beyond's UI.
+ * @returns {void}
+ */
 function setupMapsReactivity() {
     if (mapsUiObserver) {
         return;
@@ -357,6 +422,10 @@ function setupMapsReactivity() {
     window.addEventListener('resize', scheduleMapsRecovery);
 }
 
+/**
+ * Re-applies the Maps UI state after layout or tab changes.
+ * @returns {void}
+ */
 function scheduleMapsRecovery() {
     if (mapsResizeTimer) {
         clearTimeout(mapsResizeTimer);
@@ -386,6 +455,10 @@ function scheduleMapsRecovery() {
     }, 150);
 }
 
+/**
+ * Makes the Maps tab panel visible and populated when the Maps tab is active.
+ * @returns {HTMLElement|null} The Maps panel container if it exists.
+ */
 function ensureMapsPanelVisible() {
     // The MAPS tab content should live as a sibling to the existing tab panels,
     // not inside the currently visible panel itself.
@@ -421,6 +494,10 @@ function ensureMapsPanelVisible() {
     }
 }
 
+/**
+ * Finds the shared tab panel container that should hold the Maps content.
+ * @returns {HTMLElement|Element|Node} The relevant parent container for tab panels.
+ */
 function findTabPanelsRoot() {
     const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
     if (tabsMenu) {
@@ -440,6 +517,11 @@ function findTabPanelsRoot() {
     return document.querySelector('.ct-primary-box__content, .ct-primary-box, main') || document.body;
 }
 
+/**
+ * Updates the active styling for the tab buttons to reflect the selected tab.
+ * @param {HTMLElement} selectedButton The tab button that should appear selected.
+ * @returns {void}
+ */
 function updateTabSelection(selectedButton) {
     const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
     if (!tabsMenu) {
@@ -460,12 +542,21 @@ function updateTabSelection(selectedButton) {
     });
 }
 
+/**
+ * Removes the active styling marker from any tab buttons that are not currently selected.
+ * @returns {void}
+ */
 function clearMapsActiveFromTabs() {
     const activeMapButtons = document.querySelectorAll('button.styles_tabButton__wvSLf.maps-active');
     activeMapButtons.forEach((button) => button.classList.remove('maps-active'));
 }
 
 
+/**
+ * Hides the non-Maps tab panels so only the Maps content remains visible when the Maps tab is active.
+ * @param {HTMLElement|null} root The container that owns the tab panels.
+ * @returns {void}
+ */
 function hideNonMapsTabContainers(root) {
     // Only hide sibling tab panels inside the provided root (tab panels container).
     // If no root is provided, fall back to global behavior but warn.
@@ -484,6 +575,10 @@ function hideNonMapsTabContainers(root) {
     });
 }
 
+/**
+ * Handles activation of the Maps tab by showing the Maps panel and hiding the other tab content.
+ * @returns {void}
+ */
 function handleMapsTabClick() {
     try {
         mapsTabActive = true;
@@ -506,6 +601,11 @@ function handleMapsTabClick() {
 }
 
 // Populate maps content matching Extras structure
+/**
+ * Creates the Maps UI container inside the character sheet tab area and loads content into it.
+ * @param {HTMLElement} container The parent container that should own the Maps panel.
+ * @returns {HTMLElement} The Maps panel element that was created or reused.
+ */
 function populateMapsContent(container) {
     
     // `container` is expected to be the parent that contains tab panels.
@@ -595,6 +695,11 @@ function populateMapsContent(container) {
     return mapsTab;
 }
 
+/**
+ * Connects search, clear, and sort controls to the Maps UI inside a tab container.
+ * @param {HTMLElement} mapsTab The Maps tab container element.
+ * @returns {void}
+ */
 function setupMapsSearch(mapsTab) {
     const searchInput = mapsTab.querySelector('.ct-inventory-filter__input');
     const clearButton = mapsTab.querySelector('.ct-inventory-filter__clear');
@@ -702,6 +807,11 @@ function setupMapsSearch(mapsTab) {
     }
 }
 
+/**
+ * Reloads Maps content when the tab is first shown and no content has been rendered yet.
+ * @param {HTMLElement} mapsTab The Maps tab container element.
+ * @returns {void}
+ */
 function ensureMapsContentLoaded(mapsTab) {
     const contentArea = mapsTab.querySelector('#maps-content-area');
     const emptyState = mapsTab.querySelector('#maps-empty-state');
@@ -720,6 +830,11 @@ function ensureMapsContentLoaded(mapsTab) {
 
 // Maps are shown directly from the configured Google Drive folder.
 // Load and display stored maps
+/**
+ * Loads map cards either from a saved Google Drive mapping or from the current character's configuration.
+ * @param {HTMLElement} container The Maps tab container element.
+ * @returns {void}
+ */
 function loadStoredMaps(container) {
     if (!container) return;
     
@@ -759,6 +874,13 @@ function loadStoredMaps(container) {
 }
 
 // Load maps from Google Drive
+/**
+ * Fetches map entries from Google Drive and progressively renders them as thumbnails.
+ * @param {HTMLElement} container The Maps tab container element.
+ * @param {HTMLElement} contentArea The area that should receive map cards.
+ * @param {HTMLElement} emptyState The area used for empty/error messages.
+ * @returns {void}
+ */
 function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
     contentArea.innerHTML = '';
     contentArea.style.display = 'grid';
@@ -872,6 +994,11 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
         });
 }
 
+/**
+ * Builds a list of possible Google Drive image URLs for a single file ID.
+ * @param {string} fileId The Google Drive file identifier.
+ * @returns {string[]} A list of image URL candidates.
+ */
 function buildGoogleDriveImageUrls(fileId) {
     const utils = window.__dndBeyondContentDriveUtils || null;
     if (utils && typeof utils.buildGoogleDriveImageUrls === 'function') {
@@ -892,6 +1019,11 @@ function buildGoogleDriveImageUrls(fileId) {
     ];
 }
 
+/**
+ * Returns the preferred full-resolution URL for a Google Drive image.
+ * @param {string} fileId The Google Drive file identifier.
+ * @returns {string} A full-resolution image URL.
+ */
 function buildGoogleDriveFullResolutionUrl(fileId) {
     const utils = window.__dndBeyondContentDriveUtils || null;
     if (utils && typeof utils.buildGoogleDriveFullResolutionUrl === 'function') {
@@ -904,6 +1036,12 @@ function buildGoogleDriveFullResolutionUrl(fileId) {
     return `https://lh3.googleusercontent.com/d/${fileId}`;
 }
 
+/**
+ * Fetches and normalizes map entries from Google Drive for the current character mapping.
+ * @param {string} folderId The folder identifier to inspect.
+ * @param {Function} onProgress Optional callback invoked as new entries are discovered.
+ * @returns {Promise<Array>} The discovered map entries formatted for display.
+ */
 async function fetchGoogleDriveMaps(folderId, onProgress) {
     // If subfolder crawling is enabled per-mapping, use recursive crawler
     const seenIds = new Set();
@@ -951,6 +1089,10 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
 
 // Cache helpers for folder HTML parse results
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/**
+ * Reads the cached folder store from browser storage.
+ * @returns {Promise<Object>} The cached folder data object.
+ */
 function getCachedFolderStore() {
     return new Promise((resolve) => {
         chrome.storage.local.get('dndMaps', (res) => {
@@ -959,6 +1101,12 @@ function getCachedFolderStore() {
     });
 }
 
+/**
+ * Stores folder parsing results in browser storage for later reuse.
+ * @param {string} folderId The folder identifier to cache.
+ * @param {Object} data The parsed folder metadata to save.
+ * @returns {Promise<void>} Resolves after the cache update finishes.
+ */
 function setCachedFolderData(folderId, data) {
     return new Promise((resolve) => {
         chrome.storage.local.get('dndMaps', (res) => {
@@ -969,6 +1117,12 @@ function setCachedFolderData(folderId, data) {
     });
 }
 
+/**
+ * Requests Drive folder HTML with a timeout so slow requests do not hang the UI.
+ * @param {string} folderId The folder identifier to fetch.
+ * @param {number} [timeoutMs=5000] The maximum time to wait before failing.
+ * @returns {Promise<string>} The fetched folder HTML.
+ */
 function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
         let done = false;
@@ -995,6 +1149,14 @@ function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
 }
 
 // Crawl using breadth-first depth waves so top-level folders are processed first.
+/**
+ * Recursively crawls Google Drive subfolders to collect image entries up to a chosen depth.
+ * @param {string} rootFolderId The starting folder identifier.
+ * @param {number} maxDepth The maximum subfolder depth to traverse.
+ * @param {Set<string>} visitedSet A set of folders already visited to avoid loops.
+ * @param {Function} onProgress Optional callback for incremental progress updates.
+ * @returns {Promise<Array>} A flattened list of discovered image entries.
+ */
 async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) {
     const results = [];
     if (!rootFolderId) return results;
@@ -1083,6 +1245,11 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
     return results;
 }
 
+/**
+ * Sends a message to the background service worker to fetch folder HTML from Google Drive.
+ * @param {string} folderId The Google Drive folder identifier to request.
+ * @returns {Promise<string>} The folder HTML returned by the background worker.
+ */
 function requestDriveFolderHtml(folderId) {
     return new Promise((resolve, reject) => {
         chrome.runtime.sendMessage(
@@ -1108,6 +1275,12 @@ function requestDriveFolderHtml(folderId) {
 
 
 
+/**
+ * Extracts subfolder identifiers from Drive HTML using the shared helper layer.
+ * @param {string} html The HTML content from the Drive folder page.
+ * @param {string} parentFolderId The current folder identifier.
+ * @returns {string[]} The found subfolder IDs.
+ */
 function extractSubfolderIdsFromHtml(html, parentFolderId) {
     const utils = window.__dndBeyondContentDriveUtils || null;
     if (utils && typeof utils.extractSubfolderIdsFromHtml === 'function') {
@@ -1120,6 +1293,12 @@ function extractSubfolderIdsFromHtml(html, parentFolderId) {
     return [];
 }
 
+/**
+ * Extracts image entries from Drive HTML using the shared helper layer.
+ * @param {string} html The HTML content from the Drive folder page.
+ * @param {string} folderId The current folder identifier.
+ * @returns {Array} The parsed file entries.
+ */
 function extractGoogleDriveFileEntries(html, folderId) {
     const utils = window.__dndBeyondContentDriveUtils || null;
     if (utils && typeof utils.extractGoogleDriveFileEntries === 'function') {
@@ -1132,6 +1311,14 @@ function extractGoogleDriveFileEntries(html, folderId) {
     return [];
 }
 
+/**
+ * Shows a friendly message when the user has not configured a mapping or the content could not be loaded.
+ * @param {HTMLElement} contentArea The main content area for the Maps section.
+ * @param {HTMLElement} emptyState The empty-state container used for messages.
+ * @param {string} title A short heading for the message.
+ * @param {string} messageHtml The message body, rendered as HTML.
+ * @returns {void}
+ */
 function showMapsSettingsPrompt(contentArea, emptyState, title, messageHtml) {
     if (!contentArea || !emptyState) return;
 
@@ -1146,6 +1333,11 @@ function showMapsSettingsPrompt(contentArea, emptyState, title, messageHtml) {
     emptyState.style.display = 'block';
 }
 
+/**
+ * Escapes text before inserting it into the page as HTML.
+ * @param {*} text The raw text to escape.
+ * @returns {string} Safe HTML-ready text.
+ */
 function escapeHtml(text) {
     const helpers = window.__dndBeyondContentHelpers || {};
     if (helpers.escapeHtml) {
@@ -1165,6 +1357,11 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
+/**
+ * Sorts the current map list based on the selected sort direction.
+ * @param {Array} maps The map objects to sort.
+ * @returns {Array} The sorted map objects.
+ */
 function getSortedMapsForDisplay(maps) {
     if (!maps || maps.length === 0) return [];
     if (currentMapsSortDirection === 'asc' || currentMapsSortDirection === 'desc') {
@@ -1179,6 +1376,12 @@ function getSortedMapsForDisplay(maps) {
     return maps;
 }
 
+/**
+ * Filters the current map list with the active search query and renders the matching cards.
+ * @param {HTMLElement} contentArea The area where map cards should be appended.
+ * @param {HTMLElement} emptyState The empty-state container used when no results match.
+ * @returns {void}
+ */
 function filterAndDisplayMaps(contentArea, emptyState) {
     const query = (currentMapsSearchQuery || '').toLowerCase().trim();
     const filteredMaps = currentMapsList.filter((map) => {
@@ -1208,6 +1411,12 @@ function filterAndDisplayMaps(contentArea, emptyState) {
 }
 
 // Create a single map card element for `map`
+/**
+ * Creates a thumbnail card for a single map so it can be displayed inside the Maps tab.
+ * @param {Object} map The map metadata for the card.
+ * @param {number} index The card index used for testing hooks.
+ * @returns {HTMLElement} The DOM element representing the card.
+ */
 function createMapCard(map, index) {
     const mapCard = document.createElement('div');
     mapCard.className = 'map-card';
@@ -1325,6 +1534,12 @@ function createMapCard(map, index) {
 }
 
 // Append map cards without clearing the content area (prevents flashing)
+/**
+ * Appends new map cards without clearing the whole grid so the UI feels smoother while loading.
+ * @param {Array} newMaps The map objects to add.
+ * @param {HTMLElement} contentArea The container that should receive the cards.
+ * @returns {void}
+ */
 function appendMapCards(newMaps, contentArea) {
     if (!newMaps || newMaps.length === 0) return;
     styleMapsGrid(contentArea);
@@ -1340,6 +1555,13 @@ function appendMapCards(newMaps, contentArea) {
 }
 
 // Display maps in the content area
+/**
+ * Displays a list of maps in the content area and applies the current search and sort filters.
+ * @param {Array} maps The map objects to display.
+ * @param {HTMLElement} contentArea The container for the map cards.
+ * @param {HTMLElement} emptyState The empty-state container.
+ * @returns {void}
+ */
 function displayMaps(maps, contentArea, emptyState) {
     contentArea.innerHTML = '';
 
@@ -1356,6 +1578,11 @@ function displayMaps(maps, contentArea, emptyState) {
     filterAndDisplayMaps(contentArea, emptyState);
 }
 
+/**
+ * Applies the layout styles that create the responsive thumbnail grid for map cards.
+ * @param {HTMLElement} contentArea The container that should behave like a grid.
+ * @returns {void}
+ */
 function styleMapsGrid(contentArea) {
     contentArea.style.display = 'grid';
     contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
@@ -1370,6 +1597,11 @@ function styleMapsGrid(contentArea) {
 }
 
 // View map fullscreen
+/**
+ * Opens a full-screen modal so a selected map can be viewed at a larger size.
+ * @param {Object} map The map object whose image should be displayed.
+ * @returns {void}
+ */
 function viewMapFullscreen(map) {
     const modal = document.createElement('div');
     modal.style.cssText = `

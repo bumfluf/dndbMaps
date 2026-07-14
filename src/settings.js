@@ -3,7 +3,7 @@
 let currentEditCharacter = null;
 let originalEditCharacterName = null;
 
-document.addEventListener('DOMContentLoaded', () => {
+function initializeSettingsPage() {
     resetFormMode();
     loadMappings();
     setupEventListeners();
@@ -14,7 +14,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const depthInput = document.getElementById('subfolderDepth');
     if (checkbox) checkbox.checked = true; // enabled by default
     if (depthInput) depthInput.value = 3;
-});
+}
+
+const shared = window.__dndBeyondShared || {};
+if (shared.whenDomReady) {
+    shared.whenDomReady(initializeSettingsPage);
+} else if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeSettingsPage, { once: true });
+} else {
+    initializeSettingsPage();
+}
 
 function setupEventListeners() {
     const addCharacterBtn = document.getElementById('addCharacterBtn');
@@ -33,6 +42,11 @@ function setupEventListeners() {
 }
 
 function normalizeCharacterName(name) {
+    const shared = window.__dndBeyondShared || {};
+    if (shared.normalizeCharacterName) {
+        return shared.normalizeCharacterName(name);
+    }
+
     return (name || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
 }
 

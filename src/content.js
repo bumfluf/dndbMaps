@@ -133,6 +133,12 @@ let mapsCachePreloadFolderId = null;
 const MAPS_CACHE_WARMUP_TTL_MS = 30 * 60 * 1000;
 
 function setImportantStyles(element, styles) {
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.setImportantStyles) {
+        helpers.setImportantStyles(element, styles);
+        return;
+    }
+
     if (!element || !styles) return;
     Object.entries(styles).forEach(([name, value]) => {
         element.style.setProperty(name, value, 'important');
@@ -193,7 +199,6 @@ async function preloadMapsCacheIfNeeded() {
         .catch((error) => {
             return setMapsWarmupState(folderId, false, 0)
                 .then(() => {
-                    console.warn('[maps] cache warm failed', error && error.message ? error.message : error);
                     return [];
                 });
         });
@@ -472,7 +477,6 @@ function hideNonMapsTabContainers(root) {
             containers = Array.from(root.children).filter(c => c.className && c.className.indexOf('ct-primary-box__tab-') !== -1 && c.className.indexOf('ct-primary-box__tab-maps') === -1);
         }
     } else {
-        console.warn('hideNonMapsTabContainers called without root; hiding globally');
         containers = Array.from(document.querySelectorAll(selector));
     }
     containers.forEach(container => {
@@ -869,8 +873,15 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
 }
 
 function buildGoogleDriveImageUrls(fileId) {
-    // Prefer smaller Drive thumbnails first for faster preview loading,
-    // then fall back to view/download URLs if needed.
+    const utils = window.__dndBeyondContentDriveUtils || null;
+    if (utils && typeof utils.buildGoogleDriveImageUrls === 'function') {
+        return utils.buildGoogleDriveImageUrls(fileId);
+    }
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.buildGoogleDriveImageUrls) {
+        return helpers.buildGoogleDriveImageUrls(fileId);
+    }
+
     return [
         `https://drive.google.com/thumbnail?authuser=0&sz=w800&id=${fileId}`,
         `https://drive.google.com/thumbnail?authuser=0&sz=w1600&id=${fileId}`,
@@ -882,11 +893,15 @@ function buildGoogleDriveImageUrls(fileId) {
 }
 
 function buildGoogleDriveFullResolutionUrl(fileId) {
-    return [
-        `https://lh3.googleusercontent.com/d/${fileId}`,
-        `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`,
-        `https://drive.google.com/uc?export=view&id=${fileId}&authuser=0`
-    ][0];
+    const utils = window.__dndBeyondContentDriveUtils || null;
+    if (utils && typeof utils.buildGoogleDriveFullResolutionUrl === 'function') {
+        return utils.buildGoogleDriveFullResolutionUrl(fileId);
+    }
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.buildGoogleDriveFullResolutionUrl) {
+        return helpers.buildGoogleDriveFullResolutionUrl(fileId);
+    }
+    return `https://lh3.googleusercontent.com/d/${fileId}`;
 }
 
 async function fetchGoogleDriveMaps(folderId, onProgress) {
@@ -903,7 +918,6 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
         } else {
             const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
             if (!html) {
-                console.warn('No HTML returned for Google Drive folder fetch.');
                 return [];
             }
             fileEntries = extractGoogleDriveFileEntries(html, folderId);
@@ -1095,162 +1109,25 @@ function requestDriveFolderHtml(folderId) {
 
 
 function extractSubfolderIdsFromHtml(html, parentFolderId) {
-    const ids = new Set();
-    if (!html) return [];
-    const regex = /(?:drive\.google\.com[\/]drive|\/drive)?\/folders\/([a-zA-Z0-9_-]{25,})/gi;
-    let m;
-    while ((m = regex.exec(html)) !== null) {
-        const id = m[1];
-        if (!id) continue;
-        if (id === parentFolderId) continue;
-        if (id.length < 25) continue;
-        ids.add(id);
+    const utils = window.__dndBeyondContentDriveUtils || null;
+    if (utils && typeof utils.extractSubfolderIdsFromHtml === 'function') {
+        return utils.extractSubfolderIdsFromHtml(html, parentFolderId);
     }
-    return Array.from(ids);
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.extractSubfolderIdsFromHtml) {
+        return helpers.extractSubfolderIdsFromHtml(html, parentFolderId);
+    }
+    return [];
 }
 
 function extractGoogleDriveFileEntries(html, folderId) {
-    const fileEntries = [];
-    const seenIds = new Set();
-    const normalizedFolderId = folderId ? folderId.toString().trim() : null;
-
-    const isLikelyDriveId = (candidate) => {
-        if (!candidate || candidate === normalizedFolderId) return false;
-        if (candidate.startsWith('AIza')) return false;
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) return false; // GUIDs
-        if (candidate.length < 25 || candidate.length > 80) return false;
-        return true;
-    };
-
-    const decodeHtmlEntities = (value) => {
-        return (value || '')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&nbsp;/g, ' ');
-    };
-
-    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
-    const hasImageExtension = (value) => {
-        if (!value) return false;
-        const cleaned = decodeHtmlEntities(value.toString().replace(/<[^>]+>/g, '').trim()).trim();
-        const match = cleaned.match(/\.([a-z0-9]+)(?:[\?#].*)?$/i);
-        return !!(match && imageExtensions.includes(match[1].toLowerCase()));
-    };
-
-    const sanitizeFileName = (value) => {
-        const cleaned = decodeHtmlEntities((value || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
-        if (!cleaned) return null;
-        const stripped = cleaned.replace(/\.[^.]+$/, '').trim();
-        const lower = stripped.toLowerCase();
-        if (!stripped || lower === 'share' || lower === 'shared' || lower === 'share link' || lower === 'download' || lower === 'open' || lower === 'preview' || lower === 'image') {
-            return null;
-        }
-        return stripped;
-    };
-
-    const extractImageNameFromHtml = (html) => {
-        if (!html) return null;
-        const fallbackPattern = /([\w\-\s\.\(\)\[\]%]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:[\?#][^\s"'<>]*)?/gi;
-        let match;
-        while ((match = fallbackPattern.exec(html)) !== null) {
-            const candidate = match[1];
-            if (hasImageExtension(candidate)) {
-                return candidate;
-            }
-        }
-        return null;
-    };
-
-    const addEntry = (candidate, candidateName, rowHtml) => {
-        if (!isLikelyDriveId(candidate) || seenIds.has(candidate)) {
-            return;
-        }
-
-        let nameToUse = candidateName;
-        if (!nameToUse && rowHtml) {
-            nameToUse = extractImageNameFromHtml(rowHtml);
-        }
-        if (!nameToUse || !hasImageExtension(nameToUse)) {
-            return;
-        }
-
-        const sanitized = sanitizeFileName(nameToUse);
-        if (!sanitized) {
-            return;
-        }
-
-        seenIds.add(candidate);
-        fileEntries.push({
-            id: candidate,
-            name: sanitized,
-            originalName: nameToUse
-        });
-    };
-
-    const tryExtractNameFromRow = (rowHtml) => {
-        const namePatterns = [
-            /data-tooltip=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
-            /title=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
-            /aria-label=["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:["']|$)/i,
-            />([^<]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:<|$)/i
-        ];
-
-        for (const pattern of namePatterns) {
-            const match = pattern.exec(rowHtml);
-            if (match && match[1]) {
-                const name = sanitizeFileName(match[1]);
-                if (name) {
-                    return name;
-                }
-            }
-        }
-
-        return null;
-    };
-
-    // Handle Drive's embedded folder list view entries like <div class="flip-entry" id="entry-<ID>">
-    const flipEntryRegex = /<div\s+class=["']flip-entry["'][^>]*id=["']entry-([a-zA-Z0-9_-]{25,})["'][^>]*>[\s\S]*?<div\s+class=["']flip-entry-title["']\s*>([^<]+)<\/div>/gi;
-    let match;
-    while ((match = flipEntryRegex.exec(html)) !== null) {
-        const id = match[1];
-        const title = match[2] ? match[2].trim() : null;
-        addEntry(id, title, match[0]);
+    const utils = window.__dndBeyondContentDriveUtils || null;
+    if (utils && typeof utils.extractGoogleDriveFileEntries === 'function') {
+        return utils.extractGoogleDriveFileEntries(html, folderId);
     }
-
-    // Older Drive views may use table rows with data-id attributes; keep that as a fallback.
-    const rowDataIdRegex = /<tr[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>([\s\S]*?)<\/tr>/gi;
-    while ((match = rowDataIdRegex.exec(html)) !== null) {
-        addEntry(match[1], tryExtractNameFromRow(match[2]), match[2]);
-    }
-
-    if (fileEntries.length > 0) {
-        return fileEntries;
-    }
-
-
-
-
-    const nameIdPatterns = [
-        { pattern: /["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["'][^"']{0,400}["']([a-zA-Z0-9_-]{25,})["']/gi, nameGroup: 1, idGroup: 2 },
-        { pattern: /["']([a-zA-Z0-9_-]{25,})["'][^"']{0,400}["']([^"']+\.(?:png|jpe?g|gif|webp|svg|bmp))["']/gi, nameGroup: 2, idGroup: 1 }
-    ];
-    for (const entry of nameIdPatterns) {
-        let fallbackMatch;
-        while ((fallbackMatch = entry.pattern.exec(html)) !== null) {
-            const nameCandidate = fallbackMatch[entry.nameGroup];
-            const idCandidate = fallbackMatch[entry.idGroup];
-            if (!isLikelyDriveId(idCandidate)) {
-                continue;
-            }
-            addEntry(idCandidate, nameCandidate, html);
-        }
-    }
-
-    if (fileEntries.length > 0) {
-        return fileEntries;
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.extractGoogleDriveFileEntries) {
+        return helpers.extractGoogleDriveFileEntries(html, folderId);
     }
     return [];
 }
@@ -1270,6 +1147,16 @@ function showMapsSettingsPrompt(contentArea, emptyState, title, messageHtml) {
 }
 
 function escapeHtml(text) {
+    const helpers = window.__dndBeyondContentHelpers || {};
+    if (helpers.escapeHtml) {
+        return helpers.escapeHtml(text);
+    }
+
+    const shared = window.__dndBeyondShared || {};
+    if (shared.escapeHtml) {
+        return shared.escapeHtml(text);
+    }
+
     return (text || '').toString()
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -1578,8 +1465,11 @@ function viewMapFullscreen(map) {
 }
 
 // Initialize when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeExtension);
+const shared = window.__dndBeyondShared || {};
+if (shared.whenDomReady) {
+    shared.whenDomReady(initializeExtension);
+} else if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeExtension, { once: true });
 } else {
     initializeExtension();
 }

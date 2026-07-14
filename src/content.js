@@ -1525,7 +1525,7 @@ function createMapCard(map, index) {
     mapCard.className = 'map-card';
     mapCard.style.cssText = `
         position: relative;
-        width: 100%;
+        width: calc(100% - 4px);
         min-height: 100%;
         height: 100%;
         border-radius: 4px;
@@ -1537,6 +1537,7 @@ function createMapCard(map, index) {
         border: 1px solid #ddd;
         display: flex;
         flex-direction: column;
+        margin: 0 2px;
     `;
 
     const img = document.createElement('img');

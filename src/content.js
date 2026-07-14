@@ -1063,6 +1063,7 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
         console.error('Error during fetchGoogleDriveMaps crawl:', err);
         return [];
     }
+
     fileEntries.forEach((entry) => {
         const fileId = entry.id;
         if (seenIds.has(fileId)) {
@@ -1257,21 +1258,19 @@ function requestDriveFolderHtml(folderId) {
             { action: 'fetchDriveFolderHtml', folderId },
             (response) => {
 
-                // If the background worker reported an internal runtime error, surface it to the caller.
                 if (chrome.runtime.lastError) {
-                        reject({ success: false, error: chrome.runtime.lastError.message });
+                    console.error('requestDriveFolderHtml runtime error', chrome.runtime.lastError.message);
+                    reject({ success: false, error: chrome.runtime.lastError.message });
                     return;
                 }
 
-                    // The background worker returns a { success, html, attempts } object. If it indicates failure,
-                    // reject with the entire response so the caller can render helpful diagnostics.
-                    if (!response || !response.success) {
-                        // Return the full response object so callers can show useful diagnostics if the fetch fails.
-                        reject(response || { success: false, error: 'Background fetch failed' });
-                        return;
-                    }
+                if (!response || !response.success) {
+                    console.error('requestDriveFolderHtml failed response', response);
+                    reject(response || { success: false, error: 'Background fetch failed' });
+                    return;
+                }
 
-                    resolve(response.html || '');
+                resolve(response.html || '');
             }
         );
     });

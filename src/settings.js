@@ -326,19 +326,40 @@ function testGoogleDriveConnection() {
     
     showStatus('Testing connection...', 'loading');
     
-    // Test by attempting to fetch the folder as a public resource
-    // This checks if the folder is accessible
-    testFolderAccess(folderId)
+    testDriveFolderAccess(folderId)
         .then(accessible => {
             if (accessible) {
                 showStatus('✓ Connection successful! Folder is accessible.', 'success');
             } else {
-                showStatus('✗ Could not access folder. Make sure it\'s shared with your Google account.', 'error');
+                showStatus('✗ Could not access folder. Make sure it\'s shared with your Google account or anyone with the link.', 'error');
             }
         })
         .catch(error => {
-            showStatus('✗ Connection test failed: ' + error.message, 'error');
+            showStatus('✗ Could not access folder: ' + (error && error.message ? error.message : 'Unknown error'), 'error');
         });
+}
+
+function testDriveFolderAccess(folderId) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ action: 'testDriveFolderAccess', folderId }, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+
+            if (!response) {
+                reject(new Error('No response from background worker'));
+                return;
+            }
+
+            if (response.success && response.accessible) {
+                resolve(true);
+                return;
+            }
+
+            reject(new Error(response.error || 'Drive access failed'));
+        });
+    });
 }
 
 /**

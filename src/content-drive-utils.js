@@ -211,6 +211,20 @@
             addEntry(match[1], tryExtractNameFromRow(match[2]), match[2]);
         }
 
+        // Use a generic data-id matcher to capture Drive markup outside of table rows.
+        const genericDataIdRegex = /<[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>([\s\S]*?)<\/[a-zA-Z0-9]+>/gi;
+        while ((match = genericDataIdRegex.exec(html)) !== null) {
+            addEntry(match[1], tryExtractNameFromRow(match[2]), match[2]);
+        }
+
+        // Extract file entries from direct Drive file links in embedded pages or scripts.
+        const fileLinkRegex = /["'](?:https?:\/\/drive\.google\.com\/file\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})[^"']*["']/gi;
+        while ((match = fileLinkRegex.exec(html)) !== null) {
+            const idCandidate = match[1];
+            const context = html.slice(Math.max(0, match.index - 300), Math.min(html.length, match.index + 300));
+            addEntry(idCandidate, tryExtractNameFromRow(context) || extractImageNameFromHtml(context), context);
+        }
+
         if (fileEntries.length > 0) {
             return fileEntries;
         }
@@ -235,6 +249,7 @@
         if (fileEntries.length > 0) {
             return fileEntries;
         }
+
         return [];
     }
 

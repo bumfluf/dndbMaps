@@ -38,6 +38,13 @@
      * @param {string} fileId The Google Drive file identifier.
      * @returns {string} The preferred full-resolution image URL.
      */
+    const DRIVE_PARSER_DEBUG = false;
+function parserDebugLog(...args) {
+        if (DRIVE_PARSER_DEBUG) {
+            console.log('[Drive Parser Debug]', ...args);
+        }
+    }
+
     function buildGoogleDriveFullResolutionUrl(fileId) {
         return [
             `https://lh3.googleusercontent.com/d/${fileId}`,
@@ -113,6 +120,12 @@
             return !!(match && imageExtensions.includes(match[1].toLowerCase()));
         };
 
+        const countRegexMatches = (pattern, text) => {
+            if (!text) return 0;
+            const matches = text.match(pattern);
+            return matches ? matches.length : 0;
+        };
+
         const sanitizeFileName = (value) => {
             const cleaned = decodeHtmlEntities((value || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
             if (!cleaned) return null;
@@ -139,7 +152,15 @@
         };
 
         const addEntry = (candidate, candidateName, rowHtml) => {
-            if (!isLikelyDriveId(candidate) || seenIds.has(candidate)) {
+            const failReasons = [];
+            if (!isLikelyDriveId(candidate)) {
+                failReasons.push('invalid-id');
+            }
+            if (seenIds.has(candidate)) {
+                failReasons.push('duplicate-id');
+            }
+            if (failReasons.length > 0) {
+                parserDebugLog('addEntry skipped', { candidate, candidateName, failReasons });
                 return;
             }
 
@@ -154,11 +175,13 @@
                 nameToUse = extractImageNameFromHtml(rowHtml);
             }
             if (!nameToUse || !hasImageExtension(nameToUse)) {
+                parserDebugLog('addEntry skipped name invalid', { candidate, candidateName, extracted: nameToUse });
                 return;
             }
 
             const sanitized = sanitizeFileName(nameToUse);
             if (!sanitized) {
+                parserDebugLog('addEntry skipped sanitized invalid', { candidate, nameToUse });
                 return;
             }
 
@@ -168,6 +191,7 @@
                 name: sanitized,
                 originalName: nameToUse
             });
+            parserDebugLog('addEntry added', { candidate, name: sanitized, originalName: nameToUse });
         };
 
         const tryExtractNameFromRow = (rowHtml) => {
@@ -226,8 +250,20 @@
         }
 
         if (fileEntries.length > 0) {
+            parserDebugLog('extractGoogleDriveFileEntries returning', { folderId, count: fileEntries.length });
             return fileEntries;
         }
+
+        parserDebugLog('extractGoogleDriveFileEntries root html summary', {
+            folderId,
+            htmlSnippet: html ? html.slice(0, 400) : '',
+            normalizedFolderId,
+            flipEntryCount: countRegexMatches(/<div\s+class=["']flip-entry["'][^>]*id=["']entry-[a-zA-Z0-9_-]{25,}["'][^>]*>/gi, html),
+            dataIdRowCount: countRegexMatches(/<tr[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>/gi, html),
+            genericDataIdCount: countRegexMatches(/<[^>]+data-id=["']([a-zA-Z0-9_-]{25,})["'][^>]*>/gi, html),
+            fileLinkCount: countRegexMatches(/["'](?:https?:\/\/drive\.google\.com\/file\/d\/|\/file\/d\/)([a-zA-Z0-9_-]{25,})[^"']*["']/gi, html),
+            fallbackNameMatches: countRegexMatches(/(?:[\w\-\s\.\(\)\[\]%]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:[\?#][^\s"'<>]*)?/gi, html)
+        });
 
         // Fallback patterns: names and ids can appear near each other in attributes; capture either order.
         const nameIdPatterns = [

@@ -55,6 +55,14 @@ function injectTabButtonStyles() {
     document.head.appendChild(style);
 }
 
+const MAPS_DEBUG = false;
+const MAPS_DEBUG_SKIP_CACHE = false;
+function debugLog(...args) {
+    if (MAPS_DEBUG) {
+        console.log('[Maps Debug]', ...args);
+    }
+}
+
 // Initialize extension and inject Maps tab
 /**
  * Initializes the Maps experience for the current character sheet.
@@ -63,6 +71,7 @@ function injectTabButtonStyles() {
 async function initializeExtension() {
     
     injectTabButtonStyles();
+    debugLog('initializeExtension start');
     
     // Detect the current character before trying to build the Maps UI.
     await getCharacterName();
@@ -263,16 +272,20 @@ function loadCharacterSettings() {
     return new Promise((resolve) => {
         if (!currentCharacterName) {
             currentCharacterSettings = null;
+            debugLog('loadCharacterSettings no currentCharacterName');
             resolve(null);
             return;
         }
         
         chrome.storage.sync.get('characterMappings', (result) => {
             const mappings = result.characterMappings || {};
+            const mapping = mappings[currentCharacterName];
+            const mappingExists = Boolean(mapping);
+            debugLog('loadCharacterSettings', { currentCharacterName, mappingExists, mapping });
             
             // Use an exact stored name match so a similar name does not accidentally load the wrong folder.
-            if (mappings[currentCharacterName]) {
-                currentCharacterSettings = mappings[currentCharacterName];
+            if (mapping) {
+                currentCharacterSettings = mapping;
                 resolve(currentCharacterSettings);
                 return;
             }
@@ -294,6 +307,7 @@ let mapsResizeTimer = null;
  */
 function injectMapsTab() {
     const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
+    debugLog('injectMapsTab', { tabsMenu: !!tabsMenu });
     
     if (!tabsMenu) {
         setTimeout(injectMapsTab, 2000);
@@ -301,6 +315,7 @@ function injectMapsTab() {
     }
     
     const existingMapsTab = tabsMenu.querySelector('[data-testid="MAPS"]');
+    debugLog('injectMapsTab existingMapsTab', { existing: !!existingMapsTab });
     if (existingMapsTab) {
         setupMapsTabHandler();
         return;
@@ -344,9 +359,11 @@ function setupMapsTabHandler() {
     }
     
     try {
+        debugLog('setupMapsTabHandler binding');
         mapsTabButton.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            debugLog('Maps tab clicked');
             updateTabSelection(mapsTabButton);
             handleMapsTabClick();
         });
@@ -469,9 +486,13 @@ function ensureMapsPanelVisible() {
     // Keep the Maps content as a sibling panel instead of nesting it inside another tab panel.
     // That helps the UI stay visible and behave like the rest of the character sheet.
     const root = findTabPanelsRoot();
-    if (!root) return null;
+    if (!root) {
+        debugLog('ensureMapsPanelVisible no root');
+        return null;
+    }
     const mapsTabContainerSelector = '.ct-primary-box__tab-maps';
     let mapsTabContainer = root.querySelector(mapsTabContainerSelector);
+    debugLog('ensureMapsPanelVisible', { rootFound: !!root, mapsTabContainer: !!mapsTabContainer, mapsTabActive });
 
     if (mapsTabActive) {
         hideNonMapsTabContainers(root);
@@ -491,7 +512,9 @@ function ensureMapsPanelVisible() {
             });
         }
 
-        return mapsTabContainer || root.querySelector('.ct-maps-section') || null;
+        const result = mapsTabContainer || root.querySelector('.ct-maps-section') || null;
+        debugLog('ensureMapsPanelVisible returning', { result: !!result });
+        return result;
     } else {
         if (mapsTabContainer) {
             mapsTabContainer.style.setProperty('display', 'none', 'important');
@@ -587,6 +610,7 @@ function hideNonMapsTabContainers(root) {
  */
 function handleMapsTabClick() {
     try {
+        debugLog('handleMapsTabClick start');
         mapsTabActive = true;
 
         const mapsTab = document.querySelector('[data-testid="MAPS"]');
@@ -839,6 +863,7 @@ function ensureMapsContentLoaded(mapsTab) {
  */
 function loadStoredMaps(container) {
     if (!container) return;
+    debugLog('loadStoredMaps', { currentCharacterName, currentCharacterSettings });
     
     const contentArea = container.querySelector('#maps-content-area');
     const emptyState = container.querySelector('#maps-empty-state');
@@ -853,6 +878,7 @@ function loadStoredMaps(container) {
     currentMapsRenderedState = contentState;
 
     // Use the configured Google Drive folder when a mapping exists for this character.
+    debugLog('loadStoredMaps contentState', { currentCharacterName, currentCharacterSettings });
     if (currentCharacterSettings && currentCharacterSettings.folderId) {
         loadMapsFromGoogleDrive(container, contentArea, emptyState);
         return;
@@ -884,6 +910,7 @@ function loadStoredMaps(container) {
  * @returns {void}
  */
 function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
+    debugLog('loadMapsFromGoogleDrive start', { folderId: currentCharacterSettings && currentCharacterSettings.folderId });
     contentArea.innerHTML = '';
     contentArea.style.display = 'grid';
     // Show a lightweight loading message until the first thumbnails start arriving.
@@ -918,6 +945,7 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
     const onProgress = (info) => {
         try {
             const newEntries = info && info.newEntries ? info.newEntries : [];
+            debugLog('loadMapsFromGoogleDrive onProgress', { folderId: currentCharacterSettings && currentCharacterSettings.folderId, newEntriesCount: newEntries.length, folderIdInfo: info && info.folderId });
             const added = [];
             for (const e of newEntries) {
                 if (!accumulated.seen.has(e.id)) {
@@ -950,6 +978,15 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
 
     fetchGoogleDriveMaps(currentCharacterSettings.folderId, onProgress)
         .then(maps => {
+            debugLog('loadMapsFromGoogleDrive completed', { mapsCount: maps.length, folderId: currentCharacterSettings && currentCharacterSettings.folderId, accumulatedMaps: currentMapsList.length });
+            if (!maps || maps.length === 0) {
+                debugLog('loadMapsFromGoogleDrive empty result', {
+                    folderId: currentCharacterSettings && currentCharacterSettings.folderId,
+                    currentMapsListLength: currentMapsList.length,
+                    contentAreaChildren: contentArea ? contentArea.children.length : 0,
+                    emptyStateVisible: emptyState ? emptyState.style.display : 'unknown'
+                });
+            }
             // Remove the loading notice when the fetch completes, whether it was ever shown or not.
             try { if (typeof loadingDiv !== 'undefined' && loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (e) { /* ignore */ }
 
@@ -1046,23 +1083,28 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
     const seenIds = new Set();
     const maps = [];
     let fileEntries = [];
+    debugLog('fetchGoogleDriveMaps start', { folderId, currentCharacterSettings });
     try {
         const searchSubfolders = (currentCharacterSettings && typeof currentCharacterSettings.searchSubfolders !== 'undefined') ? !!currentCharacterSettings.searchSubfolders : true;
         const subfolderDepth = (currentCharacterSettings && currentCharacterSettings.subfolderDepth) ? Math.max(1, Math.min(6, parseInt(currentCharacterSettings.subfolderDepth, 10) || 3)) : 3;
+        debugLog('fetchGoogleDriveMaps config', { folderId, searchSubfolders, subfolderDepth });
         if (searchSubfolders) {
             const entries = await crawlDriveFolder(folderId, subfolderDepth, new Set(), onProgress);
             fileEntries = entries || [];
         } else {
             const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
             if (!html) {
+                debugLog('fetchGoogleDriveMaps no html returned', { folderId });
                 return [];
             }
+            debugLog('fetchGoogleDriveMaps html fetched', { folderId, htmlLength: html.length });
             fileEntries = extractGoogleDriveFileEntries(html, folderId);
         }
     } catch (err) {
         console.error('Error during fetchGoogleDriveMaps crawl:', err);
         return [];
     }
+    debugLog('fetchGoogleDriveMaps parsed fileEntries', { folderId, fileEntriesCount: fileEntries.length });
 
     fileEntries.forEach((entry) => {
         const fileId = entry.id;
@@ -1174,32 +1216,46 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
             if (cached && (Date.now() - (cached.ts || 0) < CACHE_TTL_MS)) {
                 const entries = cached.entries || [];
                 const subfolders = cached.subfolders || [];
-                for (const e of entries) {
-                    if (!seenFileIds.has(e.id)) {
-                        seenFileIds.add(e.id);
-                        results.push(e);
+                if (entries.length === 0 && subfolders.length === 0) {
+                    debugLog('crawlDriveFolder ignoring empty cached result and refetching', { folderId, depthLeft, cachedTs: cached.ts });
+                } else {
+                    debugLog('crawlDriveFolder using cache', { folderId, depthLeft, entriesCount: entries.length, subfoldersCount: subfolders.length });
+                    for (const e of entries) {
+                        if (!seenFileIds.has(e.id)) {
+                            seenFileIds.add(e.id);
+                            results.push(e);
+                        }
                     }
-                }
-                scanned += 1;
-                // When cached data exists and is fresh, use it to avoid network requests.
-                // Still notify progress consumers so incremental UI updates can occur.
-                if (entries.length > 0 || subfolders.length > 0) {
-                }
-                onProgress && onProgress({ newEntries: entries, folderId, scanned });
-                if (depthLeft < maxDepth) {
-                    for (const sf of subfolders) {
-                        if (!visitedFolders.has(sf)) queue.push({ id: sf, depth: depthLeft + 1 });
+                    scanned += 1;
+                    // When cached data exists and is fresh, use it to avoid network requests.
+                    // Still notify progress consumers so incremental UI updates can occur.
+                    if (entries.length > 0 || subfolders.length > 0) {
                     }
+                    onProgress && onProgress({ newEntries: entries, folderId, scanned });
+                    if (depthLeft < maxDepth) {
+                        for (const sf of subfolders) {
+                            if (!visitedFolders.has(sf)) queue.push({ id: sf, depth: depthLeft + 1 });
+                        }
+                    }
+                    return;
                 }
-                return;
             }
         } catch (cerr) {
         }
 
         try {
+            debugLog('crawlDriveFolder processFolder', { folderId, depthLeft, cached: false });
             const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
             const entries = extractGoogleDriveFileEntries(html, folderId) || [];
             const subfolders = (depthLeft < maxDepth) ? extractSubfolderIdsFromHtml(html, folderId) : [];
+            debugLog('crawlDriveFolder fetched', {
+                folderId,
+                depthLeft,
+                htmlLength: html ? html.length : 0,
+                entriesCount: entries.length,
+                subfoldersCount: subfolders.length,
+                newEntriesCount: entries.filter((e) => !seenFileIds.has(e.id)).length
+            });
 
             const cacheData = { ts: Date.now(), entries, subfolders };
             cachedStore[folderId] = cacheData;
@@ -1266,10 +1322,17 @@ function requestDriveFolderHtml(folderId) {
 
                 if (!response || !response.success) {
                     console.error('requestDriveFolderHtml failed response', response);
+                    debugLog('requestDriveFolderHtml failed', { folderId, response });
                     reject(response || { success: false, error: 'Background fetch failed' });
                     return;
                 }
 
+                debugLog('requestDriveFolderHtml success', {
+                    folderId,
+                    attempts: response.attempts,
+                    htmlLength: response.html ? response.html.length : 0,
+                    htmlSnippet: response.html ? response.html.slice(0, 240) : ''
+                });
                 resolve(response.html || '');
             }
         );

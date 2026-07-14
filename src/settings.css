@@ -110,13 +110,14 @@ body {
 
 .form-group-checkbox {
     margin-top: 20px;
+    margin-bottom: 0px;
 }
 
 .form-group-checkbox label {
     display: inline-flex;
     align-items: center;
     gap: 18px;
-    margin-bottom: 8px;
+    margin-bottom: 0px;
     cursor: pointer;
     font-size: 15px;
 }
@@ -131,7 +132,7 @@ body {
 .subfolder-help {
     display: block;
     margin-left: 32px; 
-    margin-top: 8px; 
+    margin-top: 0px; 
     color: #c7b089;
     line-height: 1.6;
 }

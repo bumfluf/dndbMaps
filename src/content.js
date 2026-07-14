@@ -1,60 +1,17 @@
 ﻿// Content script for D&D Beyond Extension
 // This script runs on D&D Beyond pages
 
-console.info('[maps] content script loaded');
-// Toggle verbose debug logs
-const DDB_DEBUG = false;
-const originalConsoleLog = console.log.bind(console);
-console.log = (...args) => {
-    if (DDB_DEBUG) originalConsoleLog(...args);
-};
-function debugLog(...args) { if (DDB_DEBUG) console.log.apply(console, args); }
-if (DDB_DEBUG) originalConsoleLog('[maps] Debug logging enabled');
-function logMapsTiming(label, startedAt, extraInfo) {
-    const elapsed = Math.round(performance.now() - startedAt);
-    const suffix = extraInfo ? ` (${extraInfo})` : '';
-    console.info(`[maps] ${label}: ${elapsed}ms${suffix}`);
-}
-
 // Detect Underdark (dark) mode by checking character sheet computed color
 // (thumbnail footer theming removed — revert to original light-only footers)
 
-// Listen for messages from popup or background
+// Listen for messages from the settings page
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (DDB_DEBUG) console.log('Message received in content script:', message);
-    
-    if (message.action === 'getData') {
-        // Extract data from the page
-        const data = {
-            title: document.title,
-            url: window.location.href,
-            timestamp: new Date().toLocaleString()
-        };
-        
-        // Send data back to popup
-        sendResponse({ data: JSON.stringify(data, null, 2) });
-        
-        // Also save to storage via background script
-        chrome.runtime.sendMessage({
-            action: 'saveData',
-            data: JSON.stringify(data)
-        });
-        return;
-    }
-
     if (message.action === 'getCharacterName') {
-        if (currentCharacterName) {
+        if (currentCharacterName || findCharacterName()) {
             sendResponse({ characterName: currentCharacterName });
-            return;
+        } else {
+            sendResponse({ characterName: null });
         }
-
-        const found = findCharacterName();
-        if (found) {
-            sendResponse({ characterName: currentCharacterName });
-            return;
-        }
-
-        sendResponse({ characterName: null });
     }
 });
 
@@ -89,7 +46,6 @@ function injectTabButtonStyles() {
 
 // Initialize extension and inject Maps tab
 async function initializeExtension() {
-    debugLog('Extension initialized on page:', document.title);
     
     injectTabButtonStyles();
     
@@ -115,7 +71,6 @@ async function getCharacterName() {
     try {
         const href = window.location.href;
         if (lastCharacterUrl !== href) {
-            if (lastCharacterUrl !== null) console.log('URL changed, clearing cached character name:', lastCharacterUrl, '->', href);
             currentCharacterName = null;
             lastCharacterUrl = href;
         }
@@ -138,10 +93,7 @@ async function getCharacterName() {
         if (findCharacterName()) {
             return;
         }
-        console.log(`Retrying character name detection (${attempt}/${maxAttempts})`);
     }
-
-    console.log('Character name detection timed out after retries');
 }
 
 function findCharacterName() {
@@ -159,7 +111,6 @@ function findCharacterName() {
         const normalized = normalize(cand);
         if (normalized.length < 3) return false;
         currentCharacterName = cand;
-        if (DDB_DEBUG) console.log('Character name found from', source, ':', currentCharacterName);
         return true;
     };
     // Only use the DDB character header selector to find the character name.
@@ -169,8 +120,6 @@ function findCharacterName() {
     } catch (e) {
         // ignore
     }
-
-    if (DDB_DEBUG) console.log('Character name not found by preferred header selector');
     return false;
 }
 let currentMapsSearchQuery = '';
@@ -182,6 +131,13 @@ let mapsCachePreloadStarted = false;
 let mapsCachePreloadPromise = null;
 let mapsCachePreloadFolderId = null;
 const MAPS_CACHE_WARMUP_TTL_MS = 30 * 60 * 1000;
+
+function setImportantStyles(element, styles) {
+    if (!element || !styles) return;
+    Object.entries(styles).forEach(([name, value]) => {
+        element.style.setProperty(name, value, 'important');
+    });
+}
 
 function getMapsWarmupState(folderId) {
     return new Promise((resolve) => {
@@ -224,22 +180,15 @@ async function preloadMapsCacheIfNeeded() {
 
     const warmupState = await getMapsWarmupState(folderId);
     if (warmupState) {
-        console.info(`[maps] skipping warmup for ${folderId}; cache is fresh`);
         return null;
     }
 
     mapsCachePreloadStarted = true;
     mapsCachePreloadFolderId = folderId;
-    const preloadStartedAt = performance.now();
-    console.info(`[maps] warming cache for ${folderId}`);
-
     mapsCachePreloadPromise = fetchGoogleDriveMaps(folderId, () => {})
         .then((maps) => {
             return setMapsWarmupState(folderId, true, maps.length)
-                .then(() => {
-                    logMapsTiming('maps cache warmed', preloadStartedAt, `${maps.length} maps`);
-                    return maps;
-                });
+                .then(() => maps);
         })
         .catch((error) => {
             return setMapsWarmupState(folderId, false, 0)
@@ -255,7 +204,6 @@ async function preloadMapsCacheIfNeeded() {
 function loadCharacterSettings() {
     return new Promise((resolve) => {
         if (!currentCharacterName) {
-            if (DDB_DEBUG) console.log('No character name available for settings');
             currentCharacterSettings = null;
             resolve(null);
             return;
@@ -263,26 +211,21 @@ function loadCharacterSettings() {
         
         chrome.storage.sync.get('characterMappings', (result) => {
             const mappings = result.characterMappings || {};
-            if (DDB_DEBUG) console.log('Saved mapping keys:', Object.keys(mappings));
-            if (DDB_DEBUG) console.log('loadCharacterSettings: currentCharacterName:', currentCharacterName);
             
             // Only use an exact stored name match
             if (mappings[currentCharacterName]) {
                 currentCharacterSettings = mappings[currentCharacterName];
-                if (DDB_DEBUG) console.log('Settings loaded for character (exact):', currentCharacterName, currentCharacterSettings);
                 resolve(currentCharacterSettings);
                 return;
             }
 
             currentCharacterSettings = null;
-            if (DDB_DEBUG) console.log('No exact Google Drive mapping for character:', currentCharacterName);
             resolve(currentCharacterSettings);
         });
     });
 }
 
 // Inject Maps tab after Extras
-let tabsInjected = false;
 let mapsTabActive = false;
 let mapsUiObserver = null;
 let mapsResizeTimer = null;
@@ -291,15 +234,12 @@ function injectMapsTab() {
     const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
     
     if (!tabsMenu) {
-        if (DDB_DEBUG) console.log('Tabs menu not found, retrying...');
         setTimeout(injectMapsTab, 2000);
         return;
     }
     
     const existingMapsTab = tabsMenu.querySelector('[data-testid="MAPS"]');
     if (existingMapsTab) {
-        if (DDB_DEBUG) console.log('Maps tab already exists');
-        tabsInjected = true;
         setupMapsTabHandler();
         return;
     }
@@ -316,9 +256,6 @@ function injectMapsTab() {
         mapsTabLi.appendChild(mapsTabButton);
         
         tabsMenu.appendChild(mapsTabLi);
-        
-        if (DDB_DEBUG) console.log('Maps tab injected successfully');
-        tabsInjected = true;
         setupMapsTabHandler();
     } catch (error) {
         console.error('Error injecting Maps tab:', error);
@@ -326,12 +263,10 @@ function injectMapsTab() {
 }
 
 // Setup Maps tab handler
-let tabHandlerSetup = false;
 function setupMapsTabHandler() {
     const mapsTabButton = document.querySelector('[data-testid="MAPS"]');
     
     if (!mapsTabButton) {
-        if (DDB_DEBUG) console.log('Maps tab button not found, retrying...');
         setTimeout(setupMapsTabHandler, 500);
         return;
     }
@@ -342,14 +277,10 @@ function setupMapsTabHandler() {
         return;
     }
     
-    if (DDB_DEBUG) console.log('Maps tab button found, attaching click handler');
-    tabHandlerSetup = true;
-    
     try {
         mapsTabButton.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (DDB_DEBUG) console.log('Maps tab clicked');
             updateTabSelection(mapsTabButton);
             handleMapsTabClick();
         });
@@ -373,7 +304,6 @@ function setupGlobalTabHandlers() {
         }
 
         const dataTestId = button.getAttribute('data-testid');
-        if (DDB_DEBUG) console.log('Global tab click detected:', dataTestId || 'unknown');
 
         if (dataTestId === 'MAPS') {
             return;
@@ -386,13 +316,11 @@ function setupGlobalTabHandlers() {
         mapsContainers.forEach((mapsContainer) => {
             mapsContainer.style.setProperty('display', 'none', 'important');
         });
-        if (DDB_DEBUG) console.log('Maps containers hidden via global handler');
 
         const allTabContainers = root ? root.querySelectorAll('[class*="ct-primary-box__tab"]:not(.ct-primary-box__tab-maps)') : document.querySelectorAll('[class*="ct-primary-box__tab"]:not(.ct-primary-box__tab-maps)');
         allTabContainers.forEach(container => {
             container.style.display = '';
         });
-        console.log('Non-Maps containers re-enabled via global handler');
 
         updateTabSelection(button);
         clearMapsActiveFromTabs();
@@ -467,14 +395,16 @@ function ensureMapsPanelVisible() {
 
         mapsTabContainer = root.querySelector(mapsTabContainerSelector);
         if (mapsTabContainer) {
-            mapsTabContainer.style.setProperty('display', 'block', 'important');
-            mapsTabContainer.style.setProperty('visibility', 'visible', 'important');
-            mapsTabContainer.style.setProperty('opacity', '1', 'important');
-            mapsTabContainer.style.setProperty('position', 'relative', 'important');
-            mapsTabContainer.style.setProperty('z-index', '10000', 'important');
-            mapsTabContainer.style.setProperty('min-height', '0', 'important');
-            mapsTabContainer.style.setProperty('background', 'transparent', 'important');
-            mapsTabContainer.style.setProperty('width', '100%', 'important');
+            setImportantStyles(mapsTabContainer, {
+                display: 'block',
+                visibility: 'visible',
+                opacity: '1',
+                position: 'relative',
+                'z-index': '10000',
+                'min-height': '0',
+                background: 'transparent',
+                width: '100%'
+            });
         }
 
         return mapsTabContainer || root.querySelector('.ct-maps-section') || null;
@@ -531,39 +461,6 @@ function clearMapsActiveFromTabs() {
 }
 
 
-// Handle Maps tab click
-let isHandlingMapsClick = false;
-
-function findVisibleTabContentParent() {
-    const tabsMenu = document.querySelector('menu.styles_tabs__aTttL');
-    if (tabsMenu) {
-        const tabSection = tabsMenu.closest('section, div, main');
-        if (tabSection) {
-            const panelCandidates = Array.from(tabSection.querySelectorAll('div[class*="ct-primary-box__tab-"]'));
-            if (panelCandidates.length) {
-                const visiblePanel = panelCandidates.find(panel => {
-                    const style = getComputedStyle(panel);
-                    return style.display !== 'none' && style.visibility !== 'hidden' && panel.offsetWidth > 0 && panel.offsetHeight > 0;
-                }) || panelCandidates[0];
-
-                if (visiblePanel && visiblePanel.parentElement && visiblePanel.parentElement !== document.body) {
-                    return visiblePanel.parentElement;
-                }
-                return visiblePanel;
-            }
-
-            const fallbackPanelRoot = tabSection.querySelector('div[class*="ct-primary-box"]');
-            if (fallbackPanelRoot) {
-                return fallbackPanelRoot;
-            }
-            return tabSection;
-        }
-    }
-
-    const fallback = document.querySelector('.ct-primary-box__content, .ct-primary-box, main');
-    return fallback || document.body;
-}
-
 function hideNonMapsTabContainers(root) {
     // Only hide sibling tab panels inside the provided root (tab panels container).
     // If no root is provided, fall back to global behavior but warn.
@@ -578,8 +475,6 @@ function hideNonMapsTabContainers(root) {
         console.warn('hideNonMapsTabContainers called without root; hiding globally');
         containers = Array.from(document.querySelectorAll(selector));
     }
-
-    if (DDB_DEBUG) console.log('Hiding non-Maps tab containers:', containers.length);
     containers.forEach(container => {
         container.style.display = 'none';
     });
@@ -587,14 +482,11 @@ function hideNonMapsTabContainers(root) {
 
 function handleMapsTabClick() {
     try {
-        if (DDB_DEBUG) console.log('handleMapsTabClick called');
-        isHandlingMapsClick = true;
         mapsTabActive = true;
 
         const mapsTab = document.querySelector('[data-testid="MAPS"]');
         if (mapsTab) {
             updateTabSelection(mapsTab);
-            if (DDB_DEBUG) console.log('Maps tab visually activated');
         }
 
         const root = findTabPanelsRoot();
@@ -603,22 +495,14 @@ function handleMapsTabClick() {
         const mapsContainer = ensureMapsPanelVisible();
         if (mapsContainer) {
             mapsContainer.style.display = 'block';
-            if (DDB_DEBUG) console.log('Maps container displayed');
-        } else {
-            if (DDB_DEBUG) console.log('Maps container not available to display');
         }
-
-        if (DDB_DEBUG) console.log('handleMapsTabClick completed');
-        isHandlingMapsClick = false;
     } catch (error) {
         console.error('Error in handleMapsTabClick:', error);
-        isHandlingMapsClick = false;
     }
 }
 
 // Populate maps content matching Extras structure
 function populateMapsContent(container) {
-    if (DDB_DEBUG) console.log('populateMapsContent called with container:', container);
     
     // `container` is expected to be the parent that contains tab panels.
     // Create (or reuse) a child tab container that matches D&D Beyond's
@@ -637,23 +521,29 @@ function populateMapsContent(container) {
     // If the maps section already exists inside the mapsTab, ensure it is visible.
     const existingContent = mapsTab.querySelector('.ct-maps-section');
     if (existingContent) {
-        if (DDB_DEBUG) console.log('Maps content already exists inside maps tab, restoring visibility');
-        mapsTab.style.setProperty('display', 'block', 'important');
-        existingContent.style.setProperty('display', '', 'important');
+        setImportantStyles(mapsTab, {
+            display: 'block',
+            visibility: 'visible',
+            opacity: '1',
+            position: 'relative',
+            'z-index': '1000',
+            background: '#fff'
+        });
+        existingContent.style.display = '';
         ensureMapsContentLoaded(mapsTab);
         return mapsTab;
     }
 
-    mapsTab.style.setProperty('display', 'block', 'important');
-    mapsTab.style.setProperty('visibility', 'visible', 'important');
-    mapsTab.style.setProperty('opacity', '1', 'important');
-    mapsTab.style.setProperty('position', 'relative', 'important');
-    mapsTab.style.setProperty('z-index', '1000', 'important');
-    mapsTab.style.setProperty('background', '#fff', 'important');
+    setImportantStyles(mapsTab, {
+        display: 'block',
+        visibility: 'visible',
+        opacity: '1',
+        position: 'relative',
+        'z-index': '1000',
+        background: '#fff'
+    });
 
-    mapsTab.dataset.mapsContentRendered = 'true';
-
-        mapsTab.innerHTML = `
+    mapsTab.innerHTML = `
             <section class="ct-extras ct-maps-section" style="padding: 0 0px 20px; display: flex; flex-direction: column; min-height: 100%; height: 100%; width: 100%; box-sizing: border-box;">
                 <h2 class="accessibility_screenreaderOnly__OEzRB">Maps</h2>
 
@@ -693,8 +583,6 @@ function populateMapsContent(container) {
                 <div class="ct-extras__empty" id="maps-empty-state" style="margin-top: 20px; display:none;"></div>
             </section>
     `;
-
-    if (DDB_DEBUG) console.log('Maps content populated inside maps tab');
     setupMapsSearch(mapsTab);
     loadCharacterSettings().then(() => {
         loadStoredMaps(mapsTab);
@@ -827,10 +715,6 @@ function ensureMapsContentLoaded(mapsTab) {
 }
 
 // Maps are shown directly from the configured Google Drive folder.
-function setupMapsUpload(container) {
-    if (DDB_DEBUG) console.log('Maps upload setup skipped for this view');
-}
-
 // Load and display stored maps
 function loadStoredMaps(container) {
     if (!container) return;
@@ -841,33 +725,24 @@ function loadStoredMaps(container) {
 
     const contentState = currentCharacterSettings ? 'mapped' : 'no-mapping';
     if (currentCharacterName === currentMapsRenderedCharacter && contentState === currentMapsRenderedState) {
-        if (DDB_DEBUG) console.log('Maps already rendered for current character state; skipping repeated reload');
         return;
     }
 
     currentMapsRenderedCharacter = currentCharacterName;
     currentMapsRenderedState = contentState;
 
-    if (DDB_DEBUG) console.log('loadStoredMaps called with container:', !!container);
-    if (DDB_DEBUG) console.log('Content area found:', !!contentArea);
-    if (DDB_DEBUG) console.log('Empty state found:', !!emptyState);
-
     // Check if there's a Google Drive mapping for this character
-    if (DDB_DEBUG) console.log('Current character settings:', currentCharacterSettings);
     if (currentCharacterSettings && currentCharacterSettings.folderId) {
-        if (DDB_DEBUG) console.log('Google Drive mapping found, loading from Drive:', currentCharacterSettings.folderId);
         loadMapsFromGoogleDrive(container, contentArea, emptyState);
         return;
     }
 
     if (!currentCharacterName) {
-        if (DDB_DEBUG) console.log('No character name detected on page; prompting user to add mapping in Settings');
         showMapsSettingsPrompt(contentArea, emptyState, 'Character name not detected.', 'The extension could not find the character name on this page. Open extension Settings and add a mapping linking your character\'s D&D Beyond name to a Google Drive folder.');
         return;
     }
 
     if (!currentCharacterSettings) {
-        if (DDB_DEBUG) console.log('Character name detected but no matching mapping found; guiding user to Settings');
         showMapsSettingsPrompt(contentArea, emptyState, 'No mapping found for this character.', `The character name <strong>${escapeHtml(currentCharacterName)}</strong> does not match any configured mapping. Open extension Settings to add or update the character-to-folder mapping.`);
         return;
     }
@@ -875,16 +750,12 @@ function loadStoredMaps(container) {
     // Otherwise, load from local storage
     chrome.storage.local.get('dndMaps', (result) => {
         const maps = result.dndMaps || [];
-        if (DDB_DEBUG) console.log('Retrieved maps from storage:', maps.length);
         displayMaps(maps, contentArea, emptyState);
     });
 }
 
 // Load maps from Google Drive
 function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
-    const loadStartedAt = performance.now();
-    console.info('[maps] load start', currentCharacterSettings.folderId);
-    
     contentArea.innerHTML = '';
     contentArea.style.display = 'grid';
     // Show a lightweight loading message until the first thumbnail appears
@@ -918,7 +789,6 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
     currentMapsList = [];
     const accumulated = { maps: [], seen: new Set() };
     let appendedAny = false;
-    let firstRenderLogged = false;
 
     const onProgress = (info) => {
         try {
@@ -947,20 +817,14 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
                 appendedAny = true;
                 // remove loading message as soon as first thumbnails are available
                 try { if (loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (er) { /* ignore */ }
-                if (!firstRenderLogged) {
-                    firstRenderLogged = true;
-                    logMapsTiming('first cards rendered', loadStartedAt);
-                }
                 appendMapCards(added, contentArea);
             }
         } catch (e) {
-            debugLog('onProgress handler error', e && e.message);
         }
     };
 
     fetchGoogleDriveMaps(currentCharacterSettings.folderId, onProgress)
         .then(maps => {
-            debugLog('Google Drive maps retrieved:', maps.length);
             // Clear any loading indicator if present (none by default)
             try { if (typeof loadingDiv !== 'undefined' && loadingDiv && loadingDiv.parentElement) loadingDiv.remove(); } catch (e) { /* ignore */ }
 
@@ -979,7 +843,6 @@ function loadMapsFromGoogleDrive(container, contentArea, emptyState) {
             if (!appendedAny) {
                 displayMaps(maps, contentArea, emptyState);
             }
-            logMapsTiming('maps load complete', loadStartedAt, `${maps.length} maps`);
         })
         .catch(error => {
             console.error('Error loading Google Drive maps:', error);
@@ -1027,7 +890,6 @@ function buildGoogleDriveFullResolutionUrl(fileId) {
 }
 
 async function fetchGoogleDriveMaps(folderId, onProgress) {
-    const fetchStartedAt = performance.now();
     // If subfolder crawling is enabled per-mapping, use recursive crawler
     const seenIds = new Set();
     const maps = [];
@@ -1036,7 +898,6 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
         const searchSubfolders = (currentCharacterSettings && typeof currentCharacterSettings.searchSubfolders !== 'undefined') ? !!currentCharacterSettings.searchSubfolders : true;
         const subfolderDepth = (currentCharacterSettings && currentCharacterSettings.subfolderDepth) ? Math.max(1, Math.min(6, parseInt(currentCharacterSettings.subfolderDepth, 10) || 3)) : 3;
         if (searchSubfolders) {
-            debugLog('fetchGoogleDriveMaps: starting recursive crawl, depth=', subfolderDepth);
             const entries = await crawlDriveFolder(folderId, subfolderDepth, new Set(), onProgress);
             fileEntries = entries || [];
         } else {
@@ -1047,7 +908,6 @@ async function fetchGoogleDriveMaps(folderId, onProgress) {
             }
             fileEntries = extractGoogleDriveFileEntries(html, folderId);
         }
-        debugLog('Extracted file entries from HTML:', fileEntries);
     } catch (err) {
         console.error('Error during fetchGoogleDriveMaps crawl:', err);
         return [];
@@ -1096,7 +956,6 @@ function setCachedFolderData(folderId, data) {
 }
 
 function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
-    const requestStartedAt = performance.now();
     return new Promise((resolve, reject) => {
         let done = false;
         const timer = setTimeout(() => {
@@ -1110,10 +969,6 @@ function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
                 if (done) return;
                 done = true;
                 clearTimeout(timer);
-                const elapsed = performance.now() - requestStartedAt;
-                if (elapsed >= 2000) {
-                    console.info(`[maps] folder HTML fetch slow: ${Math.round(elapsed)}ms for ${folderId}`);
-                }
                 resolve(html);
             })
             .catch((err) => {
@@ -1127,7 +982,6 @@ function requestDriveFolderHtmlWithTimeout(folderId, timeoutMs = 5000) {
 
 // Crawl using breadth-first depth waves so top-level folders are processed first.
 async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) {
-    const crawlStartedAt = performance.now();
     const results = [];
     if (!rootFolderId) return results;
     const visitedFolders = visitedSet || new Set();
@@ -1139,8 +993,6 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
     const processFolder = async (folderId, depthLeft) => {
         if (!folderId || visitedFolders.has(folderId)) return;
         visitedFolders.add(folderId);
-        const folderStartAt = performance.now();
-
         try {
             const cached = cachedStore[folderId];
             if (cached && (Date.now() - (cached.ts || 0) < CACHE_TTL_MS)) {
@@ -1154,7 +1006,6 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
                 }
                 scanned += 1;
                 if (entries.length > 0 || subfolders.length > 0) {
-                    console.info(`[maps] cached folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, entries=${entries.length}, subfolders=${subfolders.length}`);
                 }
                 onProgress && onProgress({ newEntries: entries, folderId, scanned });
                 if (depthLeft < maxDepth) {
@@ -1165,22 +1016,16 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
                 return;
             }
         } catch (cerr) {
-            debugLog('cache read failed', folderId, cerr && cerr.message);
         }
 
         try {
             const html = await requestDriveFolderHtmlWithTimeout(folderId, 6000);
-            const parseStartAt = performance.now();
             const entries = extractGoogleDriveFileEntries(html, folderId) || [];
-            const parseElapsed = Math.round(performance.now() - parseStartAt);
-            if (parseElapsed >= 250) {
-                console.info(`[maps] parse folder ${folderId}: ${parseElapsed}ms, entries=${entries.length}`);
-            }
             const subfolders = (depthLeft < maxDepth) ? extractSubfolderIdsFromHtml(html, folderId) : [];
 
             const cacheData = { ts: Date.now(), entries, subfolders };
             cachedStore[folderId] = cacheData;
-            setCachedFolderData(folderId, cacheData).catch((e) => debugLog('cache save failed', e && e.message));
+            setCachedFolderData(folderId, cacheData).catch(() => {});
 
             const newEntries = [];
             for (const e of entries) {
@@ -1192,7 +1037,6 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
             }
 
             scanned += 1;
-            console.info(`[maps] folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, entries=${entries.length}, subfolders=${subfolders.length}`);
             onProgress && onProgress({ newEntries, folderId, scanned });
 
             if (depthLeft < maxDepth) {
@@ -1201,9 +1045,7 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
                 }
             }
         } catch (err) {
-            debugLog('crawlDriveFolder fetch failed for', folderId, err && err.message);
             scanned += 1;
-            console.info(`[maps] folder ${folderId}: ${Math.round(performance.now() - folderStartAt)}ms, failed`);
             onProgress && onProgress({ newEntries: [], folderId, scanned });
         }
     };
@@ -1224,17 +1066,14 @@ async function crawlDriveFolder(rootFolderId, maxDepth, visitedSet, onProgress) 
         currentDepth += 1;
     }
 
-    logMapsTiming('Drive crawl complete', crawlStartedAt, `${results.length} results`);
     return results;
 }
 
 function requestDriveFolderHtml(folderId) {
     return new Promise((resolve, reject) => {
-        debugLog('Requesting Drive folder HTML from background for folderId:', folderId);
         chrome.runtime.sendMessage(
             { action: 'fetchDriveFolderHtml', folderId },
             (response) => {
-                if (DDB_DEBUG) console.log('Background response for Drive folder HTML:', response);
 
                 if (chrome.runtime.lastError) {
                         reject({ success: false, error: chrome.runtime.lastError.message });
@@ -1388,7 +1227,6 @@ function extractGoogleDriveFileEntries(html, folderId) {
     }
 
     if (fileEntries.length > 0) {
-        if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> explicit row IDs found:', fileEntries.length);
         return fileEntries;
     }
 
@@ -1412,11 +1250,8 @@ function extractGoogleDriveFileEntries(html, folderId) {
     }
 
     if (fileEntries.length > 0) {
-        if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> paired name/id image entries found:', fileEntries.length);
         return fileEntries;
     }
-
-    if (DDB_DEBUG) console.log('extractGoogleDriveFileEntries -> no explicit image rows found, returning empty array');
     return [];
 }
 
@@ -1432,31 +1267,6 @@ function showMapsSettingsPrompt(contentArea, emptyState, title, messageHtml) {
         </div>
     `;
     emptyState.style.display = 'block';
-
-    const mapsContainer = contentArea.closest('.ct-primary-box__tab-maps');
-    if (mapsContainer) {
-        mapsContainer.dataset.mapsLastState = 'explicit-prompt';
-        mapsContainer.dataset.mapsLastCharacter = currentCharacterName || '';
-    }
-
-    setTimeout(() => {
-        const link = emptyState.querySelector('#maps-open-settings');
-        if (link) {
-            link.addEventListener('click', (ev) => {
-                ev.preventDefault();
-                try {
-                    if (chrome && chrome.runtime && chrome.runtime.openOptionsPage) {
-                        chrome.runtime.openOptionsPage();
-                    } else {
-                        window.open('settings.html', '_blank');
-                    }
-                } catch (e) {
-                    console.warn('Unable to open Settings page programmatically:', e);
-                    alert('Please open the extension Settings (right-click the extension icon → Settings) and add a mapping for your character.');
-                }
-            });
-        }
-    }, 50);
 }
 
 function escapeHtml(text) {
@@ -1501,16 +1311,7 @@ function filterAndDisplayMaps(contentArea, emptyState) {
         return;
     }
 
-    contentArea.style.display = 'grid';
-    contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
-    contentArea.style.gridAutoRows = 'minmax(180px, 1fr)';
-    contentArea.style.alignItems = 'stretch';
-    contentArea.style.alignContent = 'start';
-    contentArea.style.gap = '10px';
-    contentArea.style.minHeight = '0';
-    contentArea.style.overflowY = 'auto';
-    contentArea.style.overflowX = 'hidden';
-    contentArea.style.padding = '5px 0 18px 0';
+    styleMapsGrid(contentArea);
     if (emptyState) emptyState.style.display = 'none';
 
     displayedMaps.forEach((map, index) => {
@@ -1639,15 +1440,7 @@ function createMapCard(map, index) {
 // Append map cards without clearing the content area (prevents flashing)
 function appendMapCards(newMaps, contentArea) {
     if (!newMaps || newMaps.length === 0) return;
-    // Ensure grid styles are applied
-    contentArea.style.display = 'grid';
-    contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
-    contentArea.style.gridAutoRows = 'minmax(180px, auto)';
-    contentArea.style.gap = '10px';
-    contentArea.style.minHeight = '0';
-    contentArea.style.overflowY = 'auto';
-    contentArea.style.overflowX = 'hidden';
-    contentArea.style.padding = '5px 0 18px 0';
+    styleMapsGrid(contentArea);
 
     const fragment = document.createDocumentFragment();
     let idx = contentArea.querySelectorAll('.map-card').length;
@@ -1661,29 +1454,32 @@ function appendMapCards(newMaps, contentArea) {
 
 // Display maps in the content area
 function displayMaps(maps, contentArea, emptyState) {
-    if (DDB_DEBUG) console.log('displayMaps called, maps length:', maps.length);
-    if (DDB_DEBUG && maps && maps.length > 0) console.log('first map url:', maps[0].url);
     contentArea.innerHTML = '';
 
     if (maps.length === 0) {
-        if (DDB_DEBUG) console.log('No maps stored');
         contentArea.style.display = 'none';
         if (emptyState) emptyState.style.display = 'block';
         return;
     }
 
+    styleMapsGrid(contentArea);
+    if (emptyState) emptyState.style.display = 'none';
+
+    currentMapsList = maps;
+    filterAndDisplayMaps(contentArea, emptyState);
+}
+
+function styleMapsGrid(contentArea) {
     contentArea.style.display = 'grid';
     contentArea.style.gridTemplateColumns = 'repeat(2, minmax(0, calc(50% - 12px)))';
-    contentArea.style.gridAutoRows = 'minmax(180px, auto)';
+    contentArea.style.gridAutoRows = 'minmax(180px, 1fr)';
+    contentArea.style.alignItems = 'stretch';
+    contentArea.style.alignContent = 'start';
     contentArea.style.gap = '10px';
     contentArea.style.minHeight = '0';
     contentArea.style.overflowY = 'auto';
     contentArea.style.overflowX = 'hidden';
     contentArea.style.padding = '5px 0 18px 0';
-    if (emptyState) emptyState.style.display = 'none';
-
-    currentMapsList = maps;
-    filterAndDisplayMaps(contentArea, emptyState);
 }
 
 // View map fullscreen

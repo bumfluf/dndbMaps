@@ -4,9 +4,11 @@ let currentEditCharacter = null;
 let originalEditCharacterName = null;
 
 document.addEventListener('DOMContentLoaded', () => {
+    resetFormMode();
     loadMappings();
     setupEventListeners();
     populateCharacterNameFromCurrentSheet();
+
     // Default UI values for per-mapping subfolder settings
     const checkbox = document.getElementById('searchSubfolders');
     const depthInput = document.getElementById('subfolderDepth');
@@ -15,10 +17,16 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupEventListeners() {
-    document.getElementById('addCharacterBtn').addEventListener('click', addCharacterMapping);
-    document.getElementById('testConnectionBtn').addEventListener('click', testGoogleDriveConnection);
-
+    const addCharacterBtn = document.getElementById('addCharacterBtn');
+    const testConnectionBtn = document.getElementById('testConnectionBtn');
     const characterNameInput = document.getElementById('characterName');
+
+    if (addCharacterBtn) {
+        addCharacterBtn.addEventListener('click', addCharacterMapping);
+    }
+    if (testConnectionBtn) {
+        testConnectionBtn.addEventListener('click', testGoogleDriveConnection);
+    }
     if (characterNameInput) {
         characterNameInput.addEventListener('input', handleCharacterNameInputChange);
     }
@@ -40,17 +48,9 @@ function handleCharacterNameInputChange(event) {
         return;
     }
 
-    // Look up existing mappings to see if the typed name matches one
     chrome.storage.sync.get('characterMappings', (result) => {
         const mappings = result.characterMappings || {};
-        let matchedKey = null;
-
-        for (const key of Object.keys(mappings)) {
-            if (normalizeCharacterName(key) === currentValue) {
-                matchedKey = key;
-                break;
-            }
-        }
+        const matchedKey = Object.keys(mappings).find((key) => normalizeCharacterName(key) === currentValue);
 
         if (matchedKey) {
             if (currentEditCharacter !== matchedKey) {
@@ -61,7 +61,6 @@ function handleCharacterNameInputChange(event) {
             return;
         }
 
-        // If the value equals the original edit name (normalized), restore edit mode
         if (originalEditCharacterName && currentValue === normalizeCharacterName(originalEditCharacterName)) {
             if (!currentEditCharacter) {
                 currentEditCharacter = originalEditCharacterName;
@@ -70,7 +69,6 @@ function handleCharacterNameInputChange(event) {
             return;
         }
 
-        // Otherwise clear edit mode
         if (currentEditCharacter) {
             currentEditCharacter = null;
             setFormMode(false);
@@ -213,9 +211,6 @@ function autofillCharacterName(characterName) {
     showStatus('Character name autofilled from active D&D Beyond sheet', 'success');
 }
 
-// Load and bind map settings
-// per-mapping subfolder settings are set via the UI when adding/editing a mapping
-
 // Extract folder ID from Google Drive URL
 function extractFolderId(input) {
     // Check if it's just an ID
@@ -241,8 +236,7 @@ function extractFolderId(input) {
 // Test Google Drive connection
 function testGoogleDriveConnection() {
     const folderInput = document.getElementById('googleDriveFolder').value.trim();
-    const statusMsg = document.getElementById('statusMessage');
-    
+
     if (!folderInput) {
         showStatus('Please enter a Google Drive folder link or ID', 'error');
         return;
@@ -274,11 +268,6 @@ function testGoogleDriveConnection() {
 // Test if folder is accessible
 function testFolderAccess(folderId) {
     return new Promise((resolve, reject) => {
-        // Try to access the folder via an indirect method
-        // Check if we can at least fetch some metadata
-        
-        // For now, we'll accept any valid folder ID and consider it valid
-        // In a production app, you'd use Google Drive API with proper authentication
         if (folderId && folderId.length > 20) {
             setTimeout(() => resolve(true), 500);
         } else {
@@ -291,7 +280,6 @@ function testFolderAccess(folderId) {
 function addCharacterMapping() {
     const characterName = document.getElementById('characterName').value.trim();
     const folderInput = document.getElementById('googleDriveFolder').value.trim();
-    const statusMsg = document.getElementById('statusMessage');
     
     if (!characterName) {
         showStatus('Please enter a character name', 'error');
@@ -337,10 +325,12 @@ function addCharacterMapping() {
         
         // Save to storage
         chrome.storage.sync.set({ characterMappings: mappings }, () => {
-            const actionText = currentEditCharacter || (originalEditCharacterName && originalEditCharacterName !== characterName && mappingExists) ? 'updated' : 'added';
+            const actionText = mappingExists ? 'updated' : 'added';
             showStatus(`✓ Character "${characterName}" ${actionText} successfully!`, 'success');
-            document.getElementById('characterName').value = '';
-            document.getElementById('googleDriveFolder').value = '';
+            const characterNameInput = document.getElementById('characterName');
+            const folderInputElement = document.getElementById('googleDriveFolder');
+            if (characterNameInput) characterNameInput.value = '';
+            if (folderInputElement) folderInputElement.value = '';
             resetFormMode();
             loadMappings();
         });
@@ -444,14 +434,14 @@ function deleteMapping(characterName) {
 // Show status message
 function showStatus(message, type) {
     const statusMsg = document.getElementById('statusMessage');
+    if (!statusMsg) return;
+
     statusMsg.textContent = message;
     statusMsg.className = 'status-message ' + type;
-    
+
     if (type !== 'loading') {
         setTimeout(() => {
             statusMsg.className = 'status-message';
         }, 4000);
     }
 }
-
-// mapsSettings is no longer stored globally; settings are saved per-character mapping
